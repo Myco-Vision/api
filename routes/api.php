@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AccountManagementController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ScanController;
@@ -47,4 +48,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/species/{species}',    [SpeciesController::class, 'update']);
         Route::delete('/species/{species}', [SpeciesController::class, 'destroy']);
     });
+
+    // ── Super Admin-only routes ──────────────────────────────────────────────
+    Route::middleware('super_admin')->prefix('admin')->group(function () {
+
+        // Account management (full CRUD)
+        Route::get('/accounts',                        [AccountManagementController::class, 'index']);
+        Route::post('/accounts',                       [AccountManagementController::class, 'store']);
+        Route::get('/accounts/{user}',                 [AccountManagementController::class, 'show']);
+        Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
+        Route::delete('/accounts/{user}',              [AccountManagementController::class, 'destroy']);
+        Route::post('/accounts/{user}/reset-password', [AccountManagementController::class, 'resetPassword']);
+    });
 });
+

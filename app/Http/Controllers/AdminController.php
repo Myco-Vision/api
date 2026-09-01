@@ -12,10 +12,11 @@ class AdminController extends Controller
     public function dashboard()
     {
         return response()->json([
-            'total_users'  => User::where('role', 'user')->count(),
-            'total_scans'  => Scan::count(),
-            'scans_today'  => Scan::whereDate('created_at', today())->count(),
-            'edible_scans' => Scan::where('result_classification', 'edible')->count(),
+            'total_users'     => User::where('role', 'user')->count(),
+            'total_admins'    => User::where('role', 'admin')->count(),
+            'total_scans'     => Scan::count(),
+            'scans_today'     => Scan::whereDate('created_at', today())->count(),
+            'edible_scans'    => Scan::where('result_classification', 'edible')->count(),
             'poisonous_scans' => Scan::where('result_classification', 'poisonous')->count(),
         ]);
     }
@@ -46,7 +47,7 @@ class AdminController extends Controller
         $data = $request->validate([
             'name'  => 'sometimes|string|max:255',
             'email' => "sometimes|email|unique:users,email,{$user->id}",
-            'role'  => 'sometimes|in:user,admin',
+            'role'  => 'sometimes|in:user,admin,super_admin',
         ]);
 
         $user->update($data);
@@ -57,8 +58,11 @@ class AdminController extends Controller
     // DELETE /api/admin/users/{user}
     public function destroyUser(User $user)
     {
+        if ($user->isSuperAdmin()) {
+            return response()->json(['message' => 'Cannot delete a Super Admin account.'], 403);
+        }
         if ($user->isAdmin()) {
-            return response()->json(['message' => 'Cannot delete an admin account.'], 403);
+            return response()->json(['message' => 'Cannot delete an admin account. Use Account Management.'], 403);
         }
         $user->delete();
 
