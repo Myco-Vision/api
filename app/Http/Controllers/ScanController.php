@@ -34,60 +34,27 @@ class ScanController extends Controller
         $path = $request->file('image')->store('scans', 'public');
 
         set_time_limit(120); // Give extra time for ML inference on CPU
-        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:8001');
-        
+        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
+        $speciesRecord = null;
+
         try {
             // Send the uploaded image to the Python FastAPI service (90s timeout)
             $response = \Illuminate\Support\Facades\Http::timeout(90)->attach(
                 'image', file_get_contents($request->file('image')->path()), $request->file('image')->getClientOriginalName()
-            )->post("{$mlApiUrl}/predict");
+            )->post("{$mlApiUrl}/classify");
 
             if ($response->successful()) {
                 $mlData = $response->json();
-                $resultName = $mlData['species'] ?? 'Unknown';
-                $confidence = $mlData['confidence'] ?? 0;
+                $resultName = $mlData['result_name'] ?? 'Unknown';
+                $confidence = $mlData['confidence_level'] ?? 0;
 
-                // 1. Check if the AI returned a binary classification directly
-                if (in_array(strtolower($resultName), ['edible', 'poisonous'])) {
-                    $resultClass = strtolower($resultName);
-                } else {
-                    // 2. Look up specific species in database
-                    $speciesRecord = \App\Models\Species::where('scientific_name', $resultName)
-                                        ->orWhere('name', $resultName)
-                                        ->first();
+                // Use the ML service's own classification directly
+                $resultClass = $mlData['result_classification'] ?? 'unknown';
 
-                    if ($speciesRecord) {
-                        $resultClass = strtolower($speciesRecord->classification);
-                    } else {
-                        // 3. Fallback to list-based classification
-                        $edibleSpecies = [
-                            'Almond mushroom', 'Amethyst chanterelle', 'Aniseed funnel',
-                            'Bay bolete', 'Beefsteak fungus', 'Birch polypore',
-                            'Blushing wood mushroom', 'Bronze bolete', 'Brown birch bolete',
-                            'Butter cap', 'Cauliflower fungus', 'Chanterelle',
-                            'Charcoal burner', 'Chestnut bolete', 'Chicken of the woods',
-                            'Clouded agaric', 'Common morel', 'Common puffball',
-                            'Dryads saddle', 'Fairy ring champignons', 'Field blewit',
-                            'Field mushroom', 'Fragrant funnel', 'Frosted chanterelle',
-                            'Giant funnel', 'Giant puffball', 'Golden bootleg',
-                            'Grisettes', 'Hedgehog fungus', 'Hen of the woods',
-                            'Horn of plenty', 'Horse mushroom', 'Jelly ears',
-                            'Larch bolete', 'Lions mane', 'Macro mushroom',
-                            'Morel', 'Oak bolete', 'Oak polypore',
-                            'Orange birch bolete', 'Orange grisette', 'Orange peel fungus',
-                            'Oyster mushroom', 'Pale oyster', 'Parasol',
-                            'Penny bun', 'Plums and custard', 'Saffron milkcap',
-                            'Scarlet elfcup', 'Semifree morel', 'Shaggy inkcap',
-                            'Shaggy parasol', 'Slippery jack', 'St georges mushroom',
-                            'Summer bolete', 'Tawny grisette', 'The blusher',
-                            'The miller', 'The prince', 'Thimble morel',
-                            'Trooping funnel', 'Truffles', 'Turkey tail',
-                            'Velvet shank', 'Winter chanterelle', 'Wood blewit',
-                            'Wood mushroom', 'Yellow foot waxcap',
-                        ];
-                        $resultClass = in_array($resultName, $edibleSpecies) ? 'edible' : 'poisonous';
-                    }
-                }
+                // Try to resolve a matching species record for the relation
+                $speciesRecord = \App\Models\Species::where('scientific_name', $resultName)
+                                    ->orWhere('name', $resultName)
+                                    ->first();
             } else {
                 Log::error('ML API Error response', [
                     'status' => $response->status(),
@@ -108,6 +75,7 @@ class ScanController extends Controller
 
         $scan = Scan::create([
             'user_id'               => $request->user()->id,
+            'species_id'            => $speciesRecord->id ?? null,
             'image_path'            => $path,
             'result_name'           => $resultName,
             'result_classification' => $resultClass,
