@@ -26,6 +26,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/scans',          [ScanController::class, 'index']);
     Route::post('/scans',         [ScanController::class, 'store']);
     Route::get('/scans/{scan}',   [ScanController::class, 'show']);
+    Route::patch('/scans/{scan}/location', [ScanController::class, 'updateLocation']);
     Route::delete('/scans/{scan}',[ScanController::class, 'destroy']);
 
     // ── Admin-only routes ────────────────────────────────────────────────────

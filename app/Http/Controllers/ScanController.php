@@ -131,6 +131,27 @@ class ScanController extends Controller
         return response()->json($scan->load('species', 'user'));
     }
 
+    // PATCH /api/scans/{scan}/location
+    public function updateLocation(Request $request, Scan $scan)
+    {
+        // Only the owner can update location
+        if ($scan->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $data = $request->validate([
+            'latitude'  => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+        ]);
+
+        $scan->update([
+            'latitude'  => $data['latitude'],
+            'longitude' => $data['longitude'],
+        ]);
+
+        return response()->json($scan->fresh());
+    }
+
     // DELETE /api/scans/{scan}
     public function destroy(Request $request, Scan $scan)
     {
