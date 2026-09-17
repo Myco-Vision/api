@@ -19,8 +19,9 @@ Route::get('/species/{species}', [SpeciesController::class, 'show']);
 Route::middleware('auth:sanctum')->group(function () {
 
     // Auth
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/me',      [AuthController::class, 'me']);
+    Route::post('/logout',       [AuthController::class, 'logout']);
+    Route::get('/me',            [AuthController::class, 'me']);
+    Route::put('/user/consent',  [AuthController::class, 'updateConsent']);
 
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);

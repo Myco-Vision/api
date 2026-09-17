@@ -74,9 +74,28 @@ class AdminController extends Controller
     {
         $scans = Scan::with('user', 'species')
             ->when($request->user_id, fn ($q) => $q->where('user_id', $request->user_id))
+            ->when($request->has('only_consented') && ($request->boolean('only_consented') || $request->only_consented == '1'), function ($q) {
+                $q->whereHas('user', function ($u) {
+                    $u->where('allow_data_training', 1)->orWhere('allow_data_training', true);
+                });
+            })
+            ->latest()
+            ->paginate(50);
+
+        return response()->json($scans);
+    }
+
+    // GET /api/admin/scans/candidates — Privacy Filtered Scans for AI Model Training
+    public function candidateScans(Request $request)
+    {
+        // STRICT PRIVACY FILTER: Only include scans from users with allow_data_training = true
+        $candidates = Scan::with('user', 'species')
+            ->whereHas('user', function ($q) {
+                $q->where('allow_data_training', true);
+            })
             ->latest()
             ->paginate(20);
 
-        return response()->json($scans);
+        return response()->json($candidates);
     }
 }

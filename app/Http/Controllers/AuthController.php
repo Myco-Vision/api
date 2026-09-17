@@ -84,4 +84,23 @@ class AuthController extends Controller
     {
         return response()->json($request->user());
     }
+
+    // PUT /api/user/consent
+    public function updateConsent(Request $request)
+    {
+        $data = $request->validate([
+            'allow_data_training' => 'required|boolean',
+        ]);
+
+        $user = $request->user();
+        $user->update([
+            'allow_data_training'        => $data['allow_data_training'],
+            'data_training_consented_at' => $data['allow_data_training'] ? now() : null,
+        ]);
+
+        return response()->json([
+            'message' => 'Consent preference updated successfully.',
+            'user'    => $user,
+        ]);
+    }
 }

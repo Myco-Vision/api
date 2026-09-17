@@ -24,6 +24,8 @@ class User extends Authenticatable
         'password',
         'role',
         'profile_photo',
+        'allow_data_training',
+        'data_training_consented_at',
     ];
 
     protected $hidden = [

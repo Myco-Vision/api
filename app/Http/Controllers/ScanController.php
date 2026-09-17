@@ -34,7 +34,7 @@ class ScanController extends Controller
         $path = $request->file('image')->store('scans', 'public');
 
         set_time_limit(120); // Give extra time for ML inference on CPU
-        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:8001');
+        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
         
         try {
             // Send the uploaded image to the Python FastAPI service (90s timeout)
