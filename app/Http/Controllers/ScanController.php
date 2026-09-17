@@ -25,10 +25,11 @@ class ScanController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'image'    => 'required|image|max:10240',
-            'latitude' => 'nullable|numeric',
-            'longitude'=> 'nullable|numeric',
-            'notes'    => 'nullable|string',
+            'image'         => 'required|image|max:10240',
+            'latitude'      => 'nullable|numeric',
+            'longitude'     => 'nullable|numeric',
+            'location_name' => 'nullable|string',
+            'notes'         => 'nullable|string',
         ]);
 
         $path = $request->file('image')->store('scans', 'public');
@@ -114,6 +115,7 @@ class ScanController extends Controller
             'confidence_level'      => $confidence,
             'latitude'              => $data['latitude'] ?? null,
             'longitude'             => $data['longitude'] ?? null,
+            'location_name'         => $data['location_name'] ?? null,
             'notes'                 => $data['notes'] ?? null,
         ]);
 
@@ -140,13 +142,15 @@ class ScanController extends Controller
         }
 
         $data = $request->validate([
-            'latitude'  => 'required|numeric|between:-90,90',
-            'longitude' => 'required|numeric|between:-180,180',
+            'latitude'      => 'required|numeric|between:-90,90',
+            'longitude'     => 'required|numeric|between:-180,180',
+            'location_name' => 'nullable|string',
         ]);
 
         $scan->update([
-            'latitude'  => $data['latitude'],
-            'longitude' => $data['longitude'],
+            'latitude'      => $data['latitude'],
+            'longitude'     => $data['longitude'],
+            'location_name' => $data['location_name'] ?? null,
         ]);
 
         return response()->json($scan->fresh());
