@@ -44,7 +44,11 @@ Route::middleware('auth:sanctum')->group(function () {
         // Scan overview
         Route::get('/scans', [AdminController::class, 'scans']);
 
-        // Species management (write)
+        // Reports & Analytics
+        Route::get('/reports', [AdminController::class, 'reports']);
+
+        // Species management (read + write)
+        Route::get('/species',              [SpeciesController::class, 'index']);
         Route::post('/species',             [SpeciesController::class, 'store']);
         Route::put('/species/{species}',    [SpeciesController::class, 'update']);
         Route::delete('/species/{species}', [SpeciesController::class, 'destroy']);
