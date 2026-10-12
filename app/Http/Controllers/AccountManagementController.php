@@ -54,7 +54,7 @@ class AccountManagementController extends Controller
             'last_name'      => $data['last_name'],
             'username'       => $data['username'],
             'email'          => $data['email'],
-            'password'       => Hash::make($data['password']),
+            'password'       => $data['password'],
             'role'           => $data['role'],
             'contact_number' => $data['contact_number'] ?? '',
             'address'        => $data['address'] ?? '',
@@ -141,7 +141,7 @@ class AccountManagementController extends Controller
         ]);
 
         $user->update([
-            'password' => Hash::make($data['password']),
+            'password' => $data['password'],
         ]);
 
         // Revoke all tokens so user must re-login
