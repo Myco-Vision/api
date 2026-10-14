@@ -88,6 +88,38 @@ class ScanController extends Controller
         return response()->json($scan->load('species'), 201);
     }
 
+    public function preview(Request $request)
+    {
+        $request->validate([
+            'image' => 'required|image|max:10240',
+        ]);
+
+        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
+
+        try {
+            $file = $request->file('image');
+
+            $response = \Illuminate\Support\Facades\Http::timeout(30)->attach(
+                'image',
+                file_get_contents($file->path()),
+                $file->getClientOriginalName()
+            )->post("{$mlApiUrl}/classify");
+
+            if (! $response->successful()) {
+                Log::error('ML preview error', [
+                    'status' => $response->status(),
+                    'body'   => $response->body(),
+                ]);
+                return response()->json(['message' => 'Classification failed.'], 502);
+            }
+
+            return response()->json($response->json());
+        } catch (\Exception $e) {
+            Log::error('ML preview exception', ['message' => $e->getMessage()]);
+            return response()->json(['message' => 'ML service offline.'], 503);
+        }
+    }
+
     // GET /api/scans/{scan}
     public function show(Request $request, Scan $scan)
     {
