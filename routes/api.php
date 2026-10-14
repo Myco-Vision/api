@@ -5,6 +5,7 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ScanController;
 use App\Http\Controllers\SpeciesController;
+use App\Http\Controllers\SubscriptionController;
 use Illuminate\Support\Facades\Route;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
@@ -14,6 +15,10 @@ Route::post('/login',    [AuthController::class, 'login']);
 // Public species listing (users can browse without logging in)
 Route::get('/species',       [SpeciesController::class, 'index']);
 Route::get('/species/{species}', [SpeciesController::class, 'show']);
+ 
+// Public subscription plans & PayMongo webhook
+Route::get('/subscription/plans', [SubscriptionController::class, 'plans']);
+Route::post('/paymongo/webhook',  [SubscriptionController::class, 'webhook']);
 
 // ── Authenticated routes ───────────────────────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
@@ -22,6 +27,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout',       [AuthController::class, 'logout']);
     Route::get('/me',            [AuthController::class, 'me']);
     Route::put('/user/consent',  [AuthController::class, 'updateConsent']);
+
+    // Subscriptions
+    Route::get('/subscription/status',    [SubscriptionController::class, 'status']);
+    Route::post('/subscription/checkout', [SubscriptionController::class, 'checkout']);
+    Route::post('/subscription/verify',   [SubscriptionController::class, 'verify']);
+    Route::post('/subscription/cancel',   [SubscriptionController::class, 'cancel']);
 
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);

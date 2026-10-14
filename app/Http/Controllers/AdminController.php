@@ -12,12 +12,14 @@ class AdminController extends Controller
     public function dashboard()
     {
         return response()->json([
-            'total_users'     => User::where('role', 'user')->count(),
-            'total_admins'    => User::where('role', 'admin')->count(),
-            'total_scans'     => Scan::count(),
-            'scans_today'     => Scan::whereDate('created_at', today())->count(),
-            'edible_scans'    => Scan::where('result_classification', 'edible')->count(),
-            'poisonous_scans' => Scan::where('result_classification', 'poisonous')->count(),
+            'total_users'        => User::where('role', 'user')->count(),
+            'total_admins'       => User::where('role', 'admin')->count(),
+            'total_scans'        => Scan::count(),
+            'scans_today'        => Scan::whereDate('created_at', today())->count(),
+            'edible_scans'       => Scan::where('result_classification', 'edible')->count(),
+            'poisonous_scans'    => Scan::where('result_classification', 'poisonous')->count(),
+            'active_subscribers' => \App\Models\Subscription::where('status', 'active')->where('expires_at', '>', now())->count(),
+            'total_revenue'      => (float) \App\Models\Subscription::where('status', 'active')->sum('price'),
         ]);
     }
 
@@ -25,6 +27,7 @@ class AdminController extends Controller
     public function users(Request $request)
     {
         $users = User::withCount('scans')
+            ->with('activeSubscription')
             ->when($request->search, fn ($q) =>
                 $q->where('name', 'like', "%{$request->search}%")
                   ->orWhere('email', 'like', "%{$request->search}%")

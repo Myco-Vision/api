@@ -32,6 +32,18 @@ class ScanController extends Controller
             'notes'         => 'nullable|string',
         ]);
 
+        $user = $request->user();
+
+        // Check if user has active subscription or remaining free scans
+        if (!$user->canScan()) {
+            return response()->json([
+                'message'               => 'Free scan limit reached (3 of 3 scans used). Please upgrade to Premium for unlimited scans.',
+                'error'                 => 'SCAN_LIMIT_REACHED',
+                'remaining_scans'       => 0,
+                'requires_subscription' => true,
+            ], 403);
+        }
+
         $path = $request->file('image')->store('scans', 'public');
 
         set_time_limit(120); // Give extra time for ML inference on CPU
