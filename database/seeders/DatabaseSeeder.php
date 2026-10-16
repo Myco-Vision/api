@@ -30,4 +30,5 @@ class DatabaseSeeder extends Seeder
             ForagerSeeder::class,
         ]);
     }
+
 }
