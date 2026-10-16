@@ -15,7 +15,7 @@ Route::post('/login',    [AuthController::class, 'login']);
 // Public species listing (users can browse without logging in)
 Route::get('/species',       [SpeciesController::class, 'index']);
 Route::get('/species/{species}', [SpeciesController::class, 'show']);
- 
+
 // Public subscription plans & PayMongo webhook
 Route::get('/subscription/plans', [SubscriptionController::class, 'plans']);
 Route::post('/paymongo/webhook',  [SubscriptionController::class, 'webhook']);
