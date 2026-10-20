@@ -8,7 +8,7 @@ use App\Http\Controllers\SpeciesController;
 use Illuminate\Support\Facades\Route;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
-Route::middleware('throttle:5,1')->group(function () {
+Route::middleware('throttle:20,1')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/login',    [AuthController::class, 'login']);
 });
