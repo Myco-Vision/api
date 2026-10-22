@@ -13,7 +13,7 @@ class SuperAdminSeeder extends Seeder
      */
     public function run(): void
     {
-        User::firstOrCreate(
+        User::updateOrCreate(
             ['email' => 'superadmin@mycovision.com'],
             [
                 'name'           => 'Super Admin',
@@ -23,7 +23,7 @@ class SuperAdminSeeder extends Seeder
                 'email'          => 'superadmin@mycovision.com',
                 'contact_number' => '',
                 'address'        => '',
-                'password'       => Hash::make('SuperAdmin123!'),
+                'password'       => 'SuperAdmin123!',
                 'role'           => 'super_admin',
             ]
         );

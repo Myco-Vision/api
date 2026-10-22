@@ -9,8 +9,10 @@ use App\Http\Controllers\SubscriptionController;
 use Illuminate\Support\Facades\Route;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
-Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login',    [AuthController::class, 'login']);
+Route::middleware('throttle:20,1')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login',    [AuthController::class, 'login']);
+});
 
 // Public species listing (users can browse without logging in)
 Route::get('/species',       [SpeciesController::class, 'index']);

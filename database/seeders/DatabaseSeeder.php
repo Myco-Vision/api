@@ -27,6 +27,7 @@ class DatabaseSeeder extends Seeder
 
         $this->call([
             SuperAdminSeeder::class,
+            SpeciesSeeder::class,
             ForagerSeeder::class,
         ]);
     }
