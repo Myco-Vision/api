@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AccountManagementController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ScanController;
@@ -7,8 +8,10 @@ use App\Http\Controllers\SpeciesController;
 use Illuminate\Support\Facades\Route;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
-Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login',    [AuthController::class, 'login']);
+Route::middleware('throttle:20,1')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login',    [AuthController::class, 'login']);
+});
 
 // Public species listing (users can browse without logging in)
 Route::get('/species',       [SpeciesController::class, 'index']);
@@ -26,6 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/scans',         [ScanController::class, 'store']);
     Route::get('/scans/{scan}',   [ScanController::class, 'show']);
     Route::post('/scans/preview', [ScanController::class, 'preview']);
+    Route::patch('/scans/{scan}/location', [ScanController::class, 'updateLocation']);
     Route::delete('/scans/{scan}',[ScanController::class, 'destroy']);
 
     // ── Admin-only routes ────────────────────────────────────────────────────
@@ -43,9 +47,26 @@ Route::middleware('auth:sanctum')->group(function () {
         // Scan overview
         Route::get('/scans', [AdminController::class, 'scans']);
 
-        // Species management (write)
+        // Reports & Analytics
+        Route::get('/reports', [AdminController::class, 'reports']);
+
+        // Species management (read + write)
+        Route::get('/species',              [SpeciesController::class, 'index']);
         Route::post('/species',             [SpeciesController::class, 'store']);
         Route::put('/species/{species}',    [SpeciesController::class, 'update']);
         Route::delete('/species/{species}', [SpeciesController::class, 'destroy']);
     });
+
+    // ── Super Admin-only routes ──────────────────────────────────────────────
+    Route::middleware('super_admin')->prefix('admin')->group(function () {
+
+        // Account management (full CRUD)
+        Route::get('/accounts',                        [AccountManagementController::class, 'index']);
+        Route::post('/accounts',                       [AccountManagementController::class, 'store']);
+        Route::get('/accounts/{user}',                 [AccountManagementController::class, 'show']);
+        Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
+        Route::delete('/accounts/{user}',              [AccountManagementController::class, 'destroy']);
+        Route::post('/accounts/{user}/reset-password', [AccountManagementController::class, 'resetPassword']);
+    });
 });
+
