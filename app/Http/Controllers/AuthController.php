@@ -31,7 +31,7 @@ class AuthController extends Controller
             'contact_number' => $data['contact_number'],
             'address'        => $data['address'],
             'password'       => $data['password'],
-            'role'           => 'user',
+            'role'           => 'forager',
         ]);
 
         $token = $user->createToken('auth_token')->plainTextToken;

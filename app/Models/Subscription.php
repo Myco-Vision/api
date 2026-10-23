@@ -13,6 +13,8 @@ class Subscription extends Model
         'user_id',
         'plan',
         'status',
+        'auto_renew',
+        'payment_status',
         'price',
         'currency',
         'paymongo_session_id',
@@ -32,6 +34,7 @@ class Subscription extends Model
             'expires_at'   => 'datetime',
             'cancelled_at' => 'datetime',
             'metadata'     => 'array',
+            'auto_renew'   => 'boolean',
         ];
     }
 

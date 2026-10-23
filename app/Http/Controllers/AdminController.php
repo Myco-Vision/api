@@ -14,7 +14,7 @@ class AdminController extends Controller
     // GET /api/admin/dashboard  — key stats + recent scans + chart data
     public function dashboard()
     {
-        $totalUsers  = User::where('role', 'user')->count();
+        $totalUsers  = User::where('role', 'forager')->count();
         $totalAdmins = User::where('role', 'admin')->count();
         $totalScans  = Scan::count();
         $scansToday  = Scan::whereDate('created_at', today())->count();
@@ -27,11 +27,11 @@ class AdminController extends Controller
         $avgConfidence = Scan::avg('confidence_level') ?? 0;
 
         // New users this month vs last month for % change
-        $usersThisMonth = User::where('role', 'user')
+        $usersThisMonth = User::where('role', 'forager')
             ->whereMonth('created_at', now()->month)
             ->whereYear('created_at', now()->year)
             ->count();
-        $usersLastMonth = User::where('role', 'user')
+        $usersLastMonth = User::where('role', 'forager')
             ->whereMonth('created_at', now()->subMonth()->month)
             ->whereYear('created_at', now()->subMonth()->year)
             ->count();
@@ -121,7 +121,7 @@ class AdminController extends Controller
         $data = $request->validate([
             'name'  => 'sometimes|string|max:255',
             'email' => "sometimes|email|unique:users,email,{$user->id}",
-            'role'  => 'sometimes|in:user,admin,super_admin',
+            'role'  => 'sometimes|in:forager,admin,super_admin',
         ]);
 
         $user->update($data);
@@ -203,7 +203,7 @@ class AdminController extends Controller
         $totalScans = Scan::where('created_at', '>=', $startDate)->count();
         $avgConfidence = Scan::where('created_at', '>=', $startDate)->avg('confidence_level') ?? 0;
 
-        $activeUsers = User::where('role', 'user')
+        $activeUsers = User::where('role', 'forager')
             ->whereHas('scans', fn ($q) => $q->where('created_at', '>=', $startDate))
             ->count();
 
