@@ -29,6 +29,7 @@ class SpeciesController extends Controller
             'classification'  => 'required|in:edible,poisonous,unknown',
             'description'     => 'nullable|string',
             'image'           => 'nullable|image|max:5120',
+            'image_path'      => 'nullable|string|max:255',
             'habitat'         => 'nullable|string|max:255',
         ]);
 
@@ -51,6 +52,7 @@ class SpeciesController extends Controller
             'classification'  => 'sometimes|in:edible,poisonous,unknown',
             'description'     => 'nullable|string',
             'image'           => 'nullable|image|max:5120',
+            'image_path'      => 'nullable|string|max:255',
             'habitat'         => 'nullable|string|max:255',
         ]);
 

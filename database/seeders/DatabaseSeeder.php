@@ -17,20 +17,18 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-            'role' => 'super_admin',
-        ]);
+        User::firstOrCreate(
+            ['email' => 'test@example.com'],
+            [
+                'name' => 'Test User',
+                'password' => '$2y$12$R8io71eIxWu4gKK/88DCnetiwgOoSHoD2s2/GqnKbq/9GgrTq8h7i',
+            ]
+        );
 
-        // User::updateOrCreate(
-        //     ['email' => 'test@example.com'],
-        //     ['name' => 'Test User', 'role' => 'super_admin']
-        // );
-        
         $this->call([
             SuperAdminSeeder::class,
             SpeciesSeeder::class,
+            ForagerSeeder::class,
         ]);
     }
 

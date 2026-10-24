@@ -14,7 +14,7 @@ class AdminController extends Controller
     // GET /api/admin/dashboard  — key stats + recent scans + chart data
     public function dashboard()
     {
-        $totalUsers  = User::where('role', 'user')->count();
+        $totalUsers  = User::where('role', 'forager')->count();
         $totalAdmins = User::where('role', 'admin')->count();
         $totalScans  = Scan::count();
         $scansToday  = Scan::whereDate('created_at', today())->count();
@@ -27,11 +27,11 @@ class AdminController extends Controller
         $avgConfidence = Scan::avg('confidence_level') ?? 0;
 
         // New users this month vs last month for % change
-        $usersThisMonth = User::where('role', 'user')
+        $usersThisMonth = User::where('role', 'forager')
             ->whereMonth('created_at', now()->month)
             ->whereYear('created_at', now()->year)
             ->count();
-        $usersLastMonth = User::where('role', 'user')
+        $usersLastMonth = User::where('role', 'forager')
             ->whereMonth('created_at', now()->subMonth()->month)
             ->whereYear('created_at', now()->subMonth()->year)
             ->count();
@@ -69,23 +69,25 @@ class AdminController extends Controller
             ]);
 
         return response()->json([
-            'total_users'      => $totalUsers,
-            'total_admins'     => $totalAdmins,
-            'total_scans'      => $totalScans,
-            'scans_today'      => $scansToday,
-            'scans_yesterday'  => $scansYesterday,
-            'edible_scans'     => $edibleScans,
-            'poisonous_scans'  => $poisonousScans,
-            'unknown_scans'    => $unknownScans,
-            'species_count'    => $speciesCount,
-            'avg_confidence'   => round($avgConfidence, 1),
-            'users_this_month' => $usersThisMonth,
-            'users_last_month' => $usersLastMonth,
-            'scan_volume'      => $scanVolume,
-            'edible_pct'       => $ediblePct,
-            'poisonous_pct'    => $poisonousPct,
-            'unknown_pct'      => $unknownPct,
-            'recent_scans'     => $recentScans,
+            'total_users'        => $totalUsers,
+            'total_admins'       => $totalAdmins,
+            'total_scans'        => $totalScans,
+            'scans_today'        => $scansToday,
+            'scans_yesterday'    => $scansYesterday,
+            'edible_scans'       => $edibleScans,
+            'poisonous_scans'    => $poisonousScans,
+            'unknown_scans'      => $unknownScans,
+            'species_count'      => $speciesCount,
+            'avg_confidence'     => round($avgConfidence, 1),
+            'users_this_month'   => $usersThisMonth,
+            'users_last_month'   => $usersLastMonth,
+            'scan_volume'        => $scanVolume,
+            'edible_pct'         => $ediblePct,
+            'poisonous_pct'      => $poisonousPct,
+            'unknown_pct'        => $unknownPct,
+            'recent_scans'       => $recentScans,
+            'active_subscribers' => \App\Models\Subscription::where('status', 'active')->where('expires_at', '>', now())->count(),
+            'total_revenue'      => (float) \App\Models\Subscription::where('status', 'active')->sum('price'),
         ]);
     }
 
@@ -93,6 +95,7 @@ class AdminController extends Controller
     public function users(Request $request)
     {
         $users = User::withCount('scans')
+            ->with('activeSubscription')
             ->when($request->search, fn ($q) =>
                 $q->where('name', 'like', "%{$request->search}%")
                   ->orWhere('email', 'like', "%{$request->search}%")
@@ -118,7 +121,7 @@ class AdminController extends Controller
         $data = $request->validate([
             'name'  => 'sometimes|string|max:255',
             'email' => "sometimes|email|unique:users,email,{$user->id}",
-            'role'  => 'sometimes|in:user,admin,super_admin',
+            'role'  => 'sometimes|in:forager,admin,super_admin',
         ]);
 
         $user->update($data);
@@ -145,6 +148,11 @@ class AdminController extends Controller
     {
         $scans = Scan::with('user', 'species')
             ->when($request->user_id, fn ($q) => $q->where('user_id', $request->user_id))
+            ->when($request->has('only_consented') && ($request->boolean('only_consented') || $request->only_consented == '1'), function ($q) {
+                $q->whereHas('user', function ($u) {
+                    $u->where('allow_data_training', 1)->orWhere('allow_data_training', true);
+                });
+            })
             ->when($request->search, fn ($q) =>
                 $q->whereHas('user', fn ($q2) => $q2->where('name', 'like', "%{$request->search}%"))
                   ->orWhere('result_name', 'like', "%{$request->search}%")
@@ -172,6 +180,20 @@ class AdminController extends Controller
         return response()->json($scans);
     }
 
+    // GET /api/admin/scans/candidates — Privacy Filtered Scans for AI Model Training
+    public function candidateScans(Request $request)
+    {
+        // STRICT PRIVACY FILTER: Only include scans from users with allow_data_training = true
+        $candidates = Scan::with('user', 'species')
+            ->whereHas('user', function ($q) {
+                $q->where('allow_data_training', true);
+            })
+            ->latest()
+            ->paginate(20);
+
+        return response()->json($candidates);
+    }
+
     // GET /api/admin/reports — analytics data
     public function reports(Request $request)
     {
@@ -181,7 +203,7 @@ class AdminController extends Controller
         $totalScans = Scan::where('created_at', '>=', $startDate)->count();
         $avgConfidence = Scan::where('created_at', '>=', $startDate)->avg('confidence_level') ?? 0;
 
-        $activeUsers = User::where('role', 'user')
+        $activeUsers = User::where('role', 'forager')
             ->whereHas('scans', fn ($q) => $q->where('created_at', '>=', $startDate))
             ->count();
 
@@ -239,9 +261,9 @@ class AdminController extends Controller
             ->take(5)
             ->get()
             ->map(fn ($u) => [
-                'name'    => $u->name,
-                'initials'=> strtoupper(collect(explode(' ', $u->name))->map(fn ($w) => $w[0] ?? '')->join('')),
-                'scans'   => $u->scans_count,
+                'name'     => $u->name,
+                'initials' => strtoupper(collect(explode(' ', $u->name))->map(fn ($w) => $w[0] ?? '')->join('')),
+                'scans'    => $u->scans_count,
             ]);
 
         return response()->json([

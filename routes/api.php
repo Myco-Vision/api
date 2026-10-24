@@ -2,9 +2,12 @@
 
 use App\Http\Controllers\AccountManagementController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AdminRetrainController;
+use App\Http\Controllers\AdminSubscriptionController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ScanController;
 use App\Http\Controllers\SpeciesController;
+use App\Http\Controllers\SubscriptionController;
 use Illuminate\Support\Facades\Route;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
@@ -17,12 +20,23 @@ Route::middleware('throttle:20,1')->group(function () {
 Route::get('/species',       [SpeciesController::class, 'index']);
 Route::get('/species/{species}', [SpeciesController::class, 'show']);
 
+// Public subscription plans & PayMongo webhook
+Route::get('/subscription/plans', [SubscriptionController::class, 'plans']);
+Route::post('/paymongo/webhook',  [SubscriptionController::class, 'webhook']);
+
 // ── Authenticated routes ───────────────────────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
 
     // Auth
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/me',      [AuthController::class, 'me']);
+    Route::post('/logout',       [AuthController::class, 'logout']);
+    Route::get('/me',            [AuthController::class, 'me']);
+    Route::put('/user/consent',  [AuthController::class, 'updateConsent']);
+
+    // Subscriptions
+    Route::get('/subscription/status',    [SubscriptionController::class, 'status']);
+    Route::post('/subscription/checkout', [SubscriptionController::class, 'checkout']);
+    Route::post('/subscription/verify',   [SubscriptionController::class, 'verify']);
+    Route::post('/subscription/cancel',   [SubscriptionController::class, 'cancel']);
 
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);
@@ -46,15 +60,32 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Scan overview
         Route::get('/scans', [AdminController::class, 'scans']);
+        Route::get('/scans/candidates', [AdminController::class, 'candidateScans']);
 
         // Reports & Analytics
         Route::get('/reports', [AdminController::class, 'reports']);
+
+        // AI Retraining
+        Route::get('/retrain/candidates', [AdminRetrainController::class, 'candidates']);
+        Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
+        Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
 
         // Species management (read + write)
         Route::get('/species',              [SpeciesController::class, 'index']);
         Route::post('/species',             [SpeciesController::class, 'store']);
         Route::put('/species/{species}',    [SpeciesController::class, 'update']);
         Route::delete('/species/{species}', [SpeciesController::class, 'destroy']);
+
+        // Subscription management
+        Route::get('/subscriptions',                              [AdminSubscriptionController::class, 'index']);
+        Route::get('/subscriptions/stats',                        [AdminSubscriptionController::class, 'stats']);
+        Route::get('/subscriptions/events',                       [AdminSubscriptionController::class, 'events']);
+        Route::get('/subscriptions/user/{user}',                  [AdminSubscriptionController::class, 'userHistory']);
+        Route::post('/subscriptions/grant',                       [AdminSubscriptionController::class, 'grant']);
+        Route::post('/subscriptions/{subscription}/extend',       [AdminSubscriptionController::class, 'extend']);
+        Route::post('/subscriptions/{subscription}/cancel',       [AdminSubscriptionController::class, 'cancel']);
+        Route::post('/subscriptions/{subscription}/revoke',       [AdminSubscriptionController::class, 'revoke']);
+        Route::patch('/subscriptions/{subscription}/auto-renew',  [AdminSubscriptionController::class, 'toggleAutoRenew']);
     });
 
     // ── Super Admin-only routes ──────────────────────────────────────────────
