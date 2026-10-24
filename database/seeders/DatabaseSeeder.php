@@ -23,17 +23,15 @@ class DatabaseSeeder extends Seeder
             'role' => 'super_admin',
         ]);
 
-<<<<<<< HEAD
         // User::updateOrCreate(
         //     ['email' => 'test@example.com'],
         //     ['name' => 'Test User', 'role' => 'super_admin']
         // );
-=======
+        
         $this->call([
             SuperAdminSeeder::class,
             SpeciesSeeder::class,
         ]);
->>>>>>> origin/test
     }
 
 }
