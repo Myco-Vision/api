@@ -26,8 +26,10 @@ class ScanController extends Controller
     {
         $data = $request->validate([
             'image'    => 'required|image|max:10240',
-            'latitude' => 'nullable|numeric',
-            'longitude'=> 'nullable|numeric',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude'=> 'nullable|numeric|between:-180,180',
+            'location_name'   => 'nullable|string|max:255',
+            'location_source' => 'nullable|in:gps,manual',
             'notes'    => 'nullable|string',
         ]);
 
@@ -114,6 +116,8 @@ class ScanController extends Controller
             'confidence_level'      => $confidence,
             'latitude'              => $data['latitude'] ?? null,
             'longitude'             => $data['longitude'] ?? null,
+            'location_name'         => $data['location_name'] ?? null,
+            'location_source'       => $data['location_source'] ?? (isset($data['latitude']) ? 'gps' : null),
             'notes'                 => $data['notes'] ?? null,
         ]);
 
@@ -142,11 +146,15 @@ class ScanController extends Controller
         $data = $request->validate([
             'latitude'  => 'required|numeric|between:-90,90',
             'longitude' => 'required|numeric|between:-180,180',
+            'location_name'   => 'nullable|string|max:255',
+            'location_source' => 'nullable|in:gps,manual',
         ]);
 
         $scan->update([
-            'latitude'  => $data['latitude'],
-            'longitude' => $data['longitude'],
+            'latitude'        => $data['latitude'],
+            'longitude'       => $data['longitude'],
+            'location_name'   => $data['location_name'] ?? null,
+            'location_source' => $data['location_source'] ?? 'gps',
         ]);
 
         return response()->json($scan->fresh());

@@ -18,6 +18,8 @@ class Scan extends Model
         'confidence_level',
         'latitude',
         'longitude',
+        'location_name',
+        'location_source',
         'notes',
     ];
 
