@@ -19,6 +19,7 @@ class Scan extends Model
         'latitude',
         'longitude',
         'location_name',
+        'location_source',
         'notes',
     ];
 

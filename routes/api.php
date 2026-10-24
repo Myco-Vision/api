@@ -5,6 +5,7 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminRetrainController;
 use App\Http\Controllers\AdminSubscriptionController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\GoogleAuthController;
 use App\Http\Controllers\ScanController;
 use App\Http\Controllers\SpeciesController;
 use App\Http\Controllers\SubscriptionController;
@@ -12,8 +13,9 @@ use Illuminate\Support\Facades\Route;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
 Route::middleware('throttle:20,1')->group(function () {
-    Route::post('/register', [AuthController::class, 'register']);
-    Route::post('/login',    [AuthController::class, 'login']);
+    Route::post('/register',       [AuthController::class, 'register']);
+    Route::post('/login',          [AuthController::class, 'login']);
+    Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
 });
 
 // Public species listing (users can browse without logging in)

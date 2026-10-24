@@ -25,11 +25,12 @@ class ScanController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'image'         => 'required|image|max:10240',
-            'latitude'      => 'nullable|numeric',
-            'longitude'     => 'nullable|numeric',
-            'location_name' => 'nullable|string',
-            'notes'         => 'nullable|string',
+            'image'    => 'required|image|max:10240',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude'=> 'nullable|numeric|between:-180,180',
+            'location_name'   => 'nullable|string|max:255',
+            'location_source' => 'nullable|in:gps,manual',
+            'notes'    => 'nullable|string',
         ]);
 
         $user = $request->user();
@@ -96,6 +97,7 @@ class ScanController extends Controller
             'latitude'              => $data['latitude'] ?? null,
             'longitude'             => $data['longitude'] ?? null,
             'location_name'         => $data['location_name'] ?? null,
+            'location_source'       => $data['location_source'] ?? (isset($data['latitude']) ? 'gps' : null),
             'notes'                 => $data['notes'] ?? null,
         ]);
 
@@ -154,15 +156,17 @@ class ScanController extends Controller
         }
 
         $data = $request->validate([
-            'latitude'      => 'required|numeric|between:-90,90',
-            'longitude'     => 'required|numeric|between:-180,180',
-            'location_name' => 'nullable|string',
+            'latitude'  => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+            'location_name'   => 'nullable|string|max:255',
+            'location_source' => 'nullable|in:gps,manual',
         ]);
 
         $scan->update([
-            'latitude'      => $data['latitude'],
-            'longitude'     => $data['longitude'],
-            'location_name' => $data['location_name'] ?? null,
+            'latitude'        => $data['latitude'],
+            'longitude'       => $data['longitude'],
+            'location_name'   => $data['location_name'] ?? null,
+            'location_source' => $data['location_source'] ?? 'gps',
         ]);
 
         return response()->json($scan->fresh());
