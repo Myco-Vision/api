@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Route;
 // ── Public routes ──────────────────────────────────────────────────────────────
 Route::middleware('throttle:20,1')->group(function () {
     Route::post('/register',       [AuthController::class, 'register']);
+    Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
     Route::post('/login',          [AuthController::class, 'login']);
     Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
 });
@@ -23,8 +24,9 @@ Route::get('/species/{species}', [SpeciesController::class, 'show']);
 Route::middleware('auth:sanctum')->group(function () {
 
     // Auth
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/me',      [AuthController::class, 'me']);
+    Route::post('/logout',           [AuthController::class, 'logout']);
+    Route::get('/me',                [AuthController::class, 'me']);
+    Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
 
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);

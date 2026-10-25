@@ -17,9 +17,11 @@ class AuthController extends Controller
             'last_name'      => 'required|string|max:255',
             'username'       => 'required|string|max:255|unique:users,username',
             'email'          => 'required|email|unique:users,email',
-            'contact_number' => 'required|string|max:255',
+            'contact_number' => ['required', 'string', 'max:20', 'regex:/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/'],
             'address'        => 'required|string',
             'password'       => 'required|string|min:8|confirmed',
+        ], [
+            'contact_number.regex' => 'Please enter a valid Philippine mobile number (e.g. 0917 123 4567 or +63 917 123 4567).',
         ]);
 
         $user = User::create([
@@ -41,6 +43,21 @@ class AuthController extends Controller
             'user'    => $user,
             'token'   => $token,
         ], 201);
+    }
+
+    // GET /api/register/check-email
+    public function checkEmail(Request $request)
+    {
+        $data = $request->validate([
+            'email' => 'required|email',
+        ]);
+
+        $taken = User::where('email', $data['email'])->exists();
+
+        return response()->json([
+            'available' => ! $taken,
+            'message'    => $taken ? 'This email is already registered.' : 'Email is available.',
+        ]);
     }
 
     // POST /api/login
@@ -83,5 +100,29 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         return response()->json($request->user());
+    }
+
+    // POST /api/complete-profile  (auth:sanctum)
+    public function completeProfile(Request $request)
+    {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'username'       => 'required|string|max:255|unique:users,username,' . $user->id,
+            'contact_number' => ['required', 'string', 'max:20', 'regex:/^[\+]?[0-9\s\-]{7,20}$/'],
+            'address'        => 'required|string|max:500',
+        ]);
+
+        $user->update([
+            'username'                  => $data['username'],
+            'contact_number'            => $data['contact_number'],
+            'address'                   => $data['address'],
+            'needs_profile_completion'  => false,
+        ]);
+
+        return response()->json([
+            'message' => 'Profile completed successfully.',
+            'user'    => $user->fresh(),
+        ]);
     }
 }

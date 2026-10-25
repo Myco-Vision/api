@@ -59,21 +59,34 @@ class GoogleAuthController extends Controller
             if (!$user->profile_photo && $picture) {
                 $user->update(['profile_photo' => $picture]);
             }
+
+            // Detect if profile is still missing required fields
+            $needsCompletion = $user->needs_profile_completion
+                || !$user->contact_number
+                || !$user->address
+                || str_starts_with($user->username ?? '', 'user_');
+
+            if ($needsCompletion && !$user->needs_profile_completion) {
+                $user->update(['needs_profile_completion' => true]);
+            }
         } else {
-            // Register new user via Google
+            // Register new user via Google — requires profile completion
             $user = User::create([
-                'name'           => $name,
-                'first_name'     => $firstName,
-                'last_name'      => $lastName,
-                'username'       => 'user_' . Str::random(8),
-                'email'          => $email,
-                'google_id'      => $googleId,
-                'profile_photo'  => $picture,
-                'password'       => bcrypt(Str::random(32)),
-                'role'           => 'user',
-                'contact_number' => null,
-                'address'        => null,
+                'name'                      => $name,
+                'first_name'                => $firstName,
+                'last_name'                => $lastName,
+                'username'                  => 'user_' . Str::random(8),
+                'email'                     => $email,
+                'google_id'                 => $googleId,
+                'profile_photo'             => $picture,
+                'password'                  => bcrypt(Str::random(32)),
+                'role'                      => 'user',
+                'contact_number'            => null,
+                'address'                   => null,
+                'needs_profile_completion'  => true,
             ]);
+
+            $needsCompletion = true;
         }
 
         // Revoke old tokens and issue a fresh one
@@ -81,9 +94,10 @@ class GoogleAuthController extends Controller
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'message' => 'Google login successful.',
-            'user'    => $user,
-            'token'   => $token,
+            'message'          => 'Google login successful.',
+            'user'             => $user->fresh(),
+            'token'            => $token,
+            'needs_completion' => (bool) ($needsCompletion ?? false),
         ]);
     }
 }
