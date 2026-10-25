@@ -10,16 +10,24 @@ return new class extends Migration
     {
         Schema::table('scans', function (Blueprint $table) {
             // Human-readable place name (e.g. "Brgy. X, City, Province")
-            $table->string('location_name')->nullable()->after('longitude');
+            // Guarded: may already exist from an earlier migration on some branches
+            if (!Schema::hasColumn('scans', 'location_name')) {
+                $table->string('location_name')->nullable()->after('longitude');
+            }
             // 'gps' = device location at scan time, 'manual' = typed-in coordinates (e.g. picked offline)
-            $table->string('location_source', 20)->nullable()->after('location_name');
+            if (!Schema::hasColumn('scans', 'location_source')) {
+                $table->string('location_source', 20)->nullable()->after('location_name');
+            }
         });
     }
 
     public function down(): void
     {
         Schema::table('scans', function (Blueprint $table) {
-            $table->dropColumn(['location_name', 'location_source']);
+            // Only drop location_source; location_name is owned by an earlier migration
+            if (Schema::hasColumn('scans', 'location_source')) {
+                $table->dropColumn('location_source');
+            }
         });
     }
 };

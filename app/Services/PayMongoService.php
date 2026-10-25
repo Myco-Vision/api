@@ -271,4 +271,52 @@ class PayMongoService
             throw $e;
         }
     }
+
+    /**
+     * Issue a refund through PayMongo's Refunds API.
+     * Amount is in pesos; PayMongo expects centavos.
+     * reason must be one of: duplicate, fraudulent, requested_by_customer, others
+     */
+    public function createRefund(string $paymentId, float $amount, string $reason = 'requested_by_customer', ?string $notes = null): array
+    {
+        // Sandbox: mock payments (or no keys configured) are refunded instantly
+        if (str_starts_with($paymentId, 'pay_mock_') || !$this->isRealCredentialsConfigured()) {
+            return [
+                'id'     => 'ref_mock_' . bin2hex(random_bytes(8)),
+                'status' => 'succeeded',
+                'amount' => $amount,
+                'mode'   => 'sandbox_simulator',
+            ];
+        }
+
+        $response = Http::withHeaders([
+            'Accept'        => 'application/json',
+            'Content-Type'  => 'application/json',
+            'Authorization' => 'Basic ' . base64_encode($this->secretKey . ':'),
+        ])->post("{$this->apiUrl}/refunds", [
+            'data' => [
+                'attributes' => array_filter([
+                    'amount'     => (int) round($amount * 100),
+                    'payment_id' => $paymentId,
+                    'reason'     => $reason,
+                    'notes'      => $notes ? mb_substr($notes, 0, 255) : null,
+                ]),
+            ],
+        ]);
+
+        if (!$response->successful()) {
+            $detail = $response->json('errors.0.detail') ?? $response->body();
+            Log::error('PayMongo refund failed: ' . $response->body());
+            throw new \Exception('PayMongo refund failed: ' . $detail);
+        }
+
+        $data = $response->json('data');
+
+        return [
+            'id'     => $data['id'] ?? null,
+            'status' => $data['attributes']['status'] ?? 'pending', // pending | succeeded | failed
+            'amount' => ($data['attributes']['amount'] ?? 0) / 100,
+            'mode'   => 'paymongo_live',
+        ];
+    }
 }

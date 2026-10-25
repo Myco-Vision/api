@@ -70,7 +70,7 @@ class GoogleAuthController extends Controller
                 'google_id'      => $googleId,
                 'profile_photo'  => $picture,
                 'password'       => bcrypt(Str::random(32)),
-                'role'           => 'user',
+                'role'           => 'forager',
                 'contact_number' => null,
                 'address'        => null,
             ]);
