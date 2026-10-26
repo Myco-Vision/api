@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -60,6 +62,50 @@ class AuthController extends Controller
         ]);
     }
 
+    // POST /api/forgot-password
+    public function sendResetLink(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+        ]);
+
+        Password::sendResetLink($request->only('email'));
+
+        // Generic message — never reveal whether the email actually exists.
+        return response()->json([
+            'message' => 'If that email is registered, a reset link has been sent.',
+        ]);
+    }
+
+    // POST /api/reset-password
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'token'    => 'required|string',
+            'email'    => 'required|email',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $status = Password::reset(
+            $request->only('email', 'password', 'password_confirmation', 'token'),
+            function ($user, $password) {
+                $user->forceFill([
+                    'password' => $password,
+                ])->setRememberToken(Str::random(60));
+
+                $user->save();
+            }
+        );
+
+        if ($status === Password::PASSWORD_RESET) {
+            return response()->json(['message' => __($status)]);
+        }
+
+        throw ValidationException::withMessages([
+            'password' => [__($status)],
+        ]);
+    }
+
     // POST /api/login
     public function login(Request $request)
     {
@@ -111,12 +157,14 @@ class AuthController extends Controller
             'username'       => 'required|string|max:255|unique:users,username,' . $user->id,
             'contact_number' => ['required', 'string', 'max:20', 'regex:/^[\+]?[0-9\s\-]{7,20}$/'],
             'address'        => 'required|string|max:500',
+            'password'       => 'required|string|min:8|confirmed',
         ]);
 
         $user->update([
             'username'                  => $data['username'],
             'contact_number'            => $data['contact_number'],
             'address'                   => $data['address'],
+            'password'                  => $data['password'],
             'needs_profile_completion'  => false,
         ]);
 

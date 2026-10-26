@@ -14,6 +14,8 @@ Route::middleware('throttle:20,1')->group(function () {
     Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
     Route::post('/login',          [AuthController::class, 'login']);
     Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
+    Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
+    Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
 });
 
 // Public species listing (users can browse without logging in)
