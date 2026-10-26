@@ -29,6 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout',           [AuthController::class, 'logout']);
     Route::get('/me',                [AuthController::class, 'me']);
     Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
+    Route::post('/change-password',   [AuthController::class, 'changePassword']);
 
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);

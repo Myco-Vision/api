@@ -173,4 +173,25 @@ class AuthController extends Controller
             'user'    => $user->fresh(),
         ]);
     }
+
+    // POST /api/change-password (auth:sanctum)
+    public function changePassword(Request $request)
+    {
+        $data = $request->validate([
+            'current_password' => 'required|string',
+            'password'         => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = $request->user();
+
+        if (! Hash::check($data['current_password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['The current password is incorrect.'],
+            ]);
+        }
+
+        $user->update(['password' => $data['password']]);
+
+        return response()->json(['message' => 'Password updated successfully.']);
+    }
 }
