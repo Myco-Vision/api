@@ -14,8 +14,11 @@ use Illuminate\Support\Facades\Route;
 // ── Public routes ──────────────────────────────────────────────────────────────
 Route::middleware('throttle:20,1')->group(function () {
     Route::post('/register',       [AuthController::class, 'register']);
+    Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
     Route::post('/login',          [AuthController::class, 'login']);
     Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
+    Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
+    Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
 });
 
 // Public species listing (users can browse without logging in)
@@ -30,9 +33,11 @@ Route::post('/paymongo/webhook',  [SubscriptionController::class, 'webhook']);
 Route::middleware('auth:sanctum')->group(function () {
 
     // Auth
-    Route::post('/logout',       [AuthController::class, 'logout']);
-    Route::get('/me',            [AuthController::class, 'me']);
-    Route::put('/user/consent',  [AuthController::class, 'updateConsent']);
+    Route::post('/logout',           [AuthController::class, 'logout']);
+    Route::get('/me',                [AuthController::class, 'me']);
+    Route::put('/user/consent',      [AuthController::class, 'updateConsent']);
+    Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
+    Route::post('/change-password',  [AuthController::class, 'changePassword']);
 
     // Subscriptions
     Route::get('/subscription/status',    [SubscriptionController::class, 'status']);
