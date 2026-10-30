@@ -127,6 +127,48 @@ class RefundController extends Controller
         return response()->json($refunds);
     }
 
+    // POST /api/admin/subscriptions/{subscription}/refund
+    // Admin opens a request on the user's behalf (e.g. from a support email). It joins
+    // the same pending queue, so the normal review / approve rules still apply.
+    public function adminCreate(Request $request, Subscription $subscription)
+    {
+        $data = $request->validate([
+            'reason_type' => 'required|in:' . implode(',', RefundPolicyService::REASON_TYPES),
+            'reason'      => 'required|string|min:10|max:2000',
+        ]);
+
+        if (!$this->policy->isPaid($subscription)) {
+            return response()->json(['message' => 'This subscription was not paid through the gateway or is already refunded, so it cannot be refunded.'], 422);
+        }
+        if (RefundRequest::where('subscription_id', $subscription->id)->whereIn('status', ['pending', 'processing'])->exists()) {
+            return response()->json(['message' => 'There is already an open refund request for this payment.'], 422);
+        }
+
+        $eval = $this->policy->evaluate($subscription);
+        // Admins may file any reason; the policy-computed amount is only a suggestion they can change on approval
+        $option = $eval['options'][$data['reason_type']] ?? $eval['options']['other'];
+
+        $refund = RefundRequest::create([
+            'user_id'          => $subscription->user_id,
+            'subscription_id'  => $subscription->id,
+            'reason_type'      => $data['reason_type'],
+            'reason'           => $data['reason'],
+            'requested_amount' => $option['amount'],
+            'refund_type'      => $option['type'],
+            'status'           => 'pending',
+            'eligibility'      => $eval,
+        ]);
+
+        SubscriptionEvent::log($subscription->user_id, 'refund_requested', $subscription->id, $request->user()->id, [
+            'refund_request_id' => $refund->id, 'reason_type' => $data['reason_type'], 'amount' => $option['amount'], 'filed_by_admin' => true,
+        ]);
+
+        return response()->json([
+            'message' => 'Refund request created. Review it in the Refunds queue.',
+            'request' => $refund->load(['user:id,name,email,username', 'subscription', 'reviewer:id,name']),
+        ], 201);
+    }
+
     // GET /api/admin/refunds/stats
     public function stats()
     {

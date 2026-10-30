@@ -6,6 +6,7 @@ use App\Http\Controllers\AdminRetrainController;
 use App\Http\Controllers\AdminSubscriptionController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\GoogleAuthController;
+use App\Http\Controllers\RefundController;
 use App\Http\Controllers\ScanController;
 use App\Http\Controllers\SpeciesController;
 use App\Http\Controllers\SubscriptionController;
@@ -44,6 +45,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/subscription/checkout', [SubscriptionController::class, 'checkout']);
     Route::post('/subscription/verify',   [SubscriptionController::class, 'verify']);
     Route::post('/subscription/cancel',   [SubscriptionController::class, 'cancel']);
+
+    // Refunds (own)
+    Route::get('/refunds',                    [RefundController::class, 'mine']);
+    Route::post('/refunds',                   [RefundController::class, 'store'])->middleware('throttle:10,1');
+    Route::post('/refunds/{refund}/cancel',   [RefundController::class, 'withdraw']);
 
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);
@@ -93,6 +99,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/subscriptions/{subscription}/cancel',       [AdminSubscriptionController::class, 'cancel']);
         Route::post('/subscriptions/{subscription}/revoke',       [AdminSubscriptionController::class, 'revoke']);
         Route::patch('/subscriptions/{subscription}/auto-renew',  [AdminSubscriptionController::class, 'toggleAutoRenew']);
+
+        // Refund review queue (approving is super admin only, see below)
+        Route::get('/refunds',                    [RefundController::class, 'index']);
+        Route::get('/refunds/stats',              [RefundController::class, 'stats']);
+        Route::post('/refunds/{refund}/reject',   [RefundController::class, 'reject']);
+        Route::post('/subscriptions/{subscription}/refund', [RefundController::class, 'adminCreate']);
     });
 
     // ── Super Admin-only routes ──────────────────────────────────────────────
@@ -105,6 +117,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
         Route::delete('/accounts/{user}',              [AccountManagementController::class, 'destroy']);
         Route::post('/accounts/{user}/reset-password', [AccountManagementController::class, 'resetPassword']);
+
+        // Approving a refund issues real money through PayMongo
+        Route::post('/refunds/{refund}/approve',       [RefundController::class, 'approve']);
     });
 });
 

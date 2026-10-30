@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\RefundRequest;
 use App\Models\Subscription;
+use App\Models\SubscriptionEvent;
 use App\Models\User;
 use App\Services\PayMongoService;
 use Carbon\Carbon;
@@ -372,8 +374,83 @@ class SubscriptionController extends Controller
             }
         }
 
+        // ── Refund confirmations ────────────────────────────────────────────
+        // payment.refund.updated → data is the refund resource (ref_…)
+        // payment.refunded       → data is the refunded payment resource (pay_…)
+        if (in_array($event, ['payment.refund.updated', 'payment.refunded'], true)) {
+            try {
+                $this->handleRefundEvent($event, $payload['data']['attributes']['data'] ?? []);
+            } catch (\Throwable $e) {
+                // Never fail the webhook: PayMongo would keep retrying a bad payload forever
+                Log::error('Refund webhook handling failed: ' . $e->getMessage());
+            }
+        }
+
         // Always return 2xx quickly, otherwise PayMongo keeps retrying
         return response()->json(['status' => 'success']);
+    }
+
+    /**
+     * Settle a 'processing' refund request from a PayMongo refund webhook.
+     * Idempotent: RefundController::finalize() ignores already-refunded requests.
+     */
+    protected function handleRefundEvent(string $event, array $resource): void
+    {
+        $id     = $resource['id'] ?? null;
+        $type   = $resource['type'] ?? null;
+        $status = $resource['attributes']['status'] ?? null;
+
+        if (!$id) {
+            return;
+        }
+
+        $refund = null;
+
+        if ($type === 'refund') {
+            $refund = RefundRequest::where('paymongo_refund_id', $id)->first();
+        }
+
+        // payment.refunded can arrive before approve() has saved the refund id,
+        // so fall back to the one request currently processing for that payment.
+        if (!$refund) {
+            $paymentId = $type === 'refund' ? ($resource['attributes']['payment_id'] ?? null) : $id;
+            if ($paymentId) {
+                $refund = RefundRequest::where('status', 'processing')
+                    ->whereHas('subscription', fn ($q) => $q->where('paymongo_payment_id', $paymentId))
+                    ->latest('id')
+                    ->first();
+            }
+        }
+
+        if (!$refund) {
+            Log::info("Refund webhook {$event}: no matching refund request for {$id}");
+            return;
+        }
+
+        if ($refund->status !== 'processing') {
+            return; // already settled (or never approved) — nothing to do
+        }
+
+        $failed    = $type === 'refund' && $status === 'failed';
+        $succeeded = $event === 'payment.refunded' || $status === 'succeeded';
+
+        if ($failed) {
+            $refund->update([
+                'status'     => 'failed',
+                'admin_note' => trim(($refund->admin_note ?? '') . "\n[Gateway] PayMongo reported the refund as failed."),
+            ]);
+            SubscriptionEvent::log($refund->user_id, 'refund_failed', $refund->subscription_id, $refund->reviewed_by, [
+                'refund_request_id' => $refund->id,
+            ]);
+            return;
+        }
+
+        if ($succeeded) {
+            if ($type === 'refund' && !$refund->paymongo_refund_id) {
+                $refund->update(['paymongo_refund_id' => $id]);
+            }
+            RefundController::finalize($refund->fresh());
+        }
     }
 
     /**

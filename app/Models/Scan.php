@@ -21,6 +21,11 @@ class Scan extends Model
         'location_name',
         'location_source',
         'notes',
+        'retrained_at',
+    ];
+
+    protected $casts = [
+        'retrained_at' => 'datetime',
     ];
 
     public function user()
