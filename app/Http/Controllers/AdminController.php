@@ -97,8 +97,10 @@ class AdminController extends Controller
         $users = User::withCount('scans')
             ->with('activeSubscription')
             ->when($request->search, fn ($q) =>
-                $q->where('name', 'like', "%{$request->search}%")
-                  ->orWhere('email', 'like', "%{$request->search}%")
+                $q->where(fn ($q2) => $q2
+                    ->where('name', 'like', "%{$request->search}%")
+                    ->orWhere('email', 'like', "%{$request->search}%")
+                    ->orWhere('username', 'like', "%{$request->search}%"))
             )
             ->when($request->role, fn ($q) =>
                 $q->where('role', $request->role)
@@ -113,20 +115,6 @@ class AdminController extends Controller
     public function showUser(User $user)
     {
         return response()->json($user->loadCount('scans')->load('scans'));
-    }
-
-    // PUT /api/admin/users/{user}
-    public function updateUser(Request $request, User $user)
-    {
-        $data = $request->validate([
-            'name'  => 'sometimes|string|max:255',
-            'email' => "sometimes|email|unique:users,email,{$user->id}",
-            'role'  => 'sometimes|in:forager,admin,super_admin',
-        ]);
-
-        $user->update($data);
-
-        return response()->json($user);
     }
 
     // DELETE /api/admin/users/{user}
@@ -154,8 +142,9 @@ class AdminController extends Controller
                 });
             })
             ->when($request->search, fn ($q) =>
-                $q->whereHas('user', fn ($q2) => $q2->where('name', 'like', "%{$request->search}%"))
-                  ->orWhere('result_name', 'like', "%{$request->search}%")
+                $q->where(fn ($q2) => $q2
+                    ->whereHas('user', fn ($u) => $u->where('name', 'like', "%{$request->search}%"))
+                    ->orWhere('result_name', 'like', "%{$request->search}%"))
             )
             ->when($request->classification, fn ($q) =>
                 $q->where('result_classification', $request->classification)

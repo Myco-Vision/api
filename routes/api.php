@@ -55,7 +55,6 @@ Route::middleware('auth:sanctum')->group(function () {
         // User management
         Route::get('/users',           [AdminController::class, 'users']);
         Route::get('/users/{user}',    [AdminController::class, 'showUser']);
-        Route::put('/users/{user}',    [AdminController::class, 'updateUser']);
         Route::delete('/users/{user}', [AdminController::class, 'destroyUser']);
 
         // Scan overview

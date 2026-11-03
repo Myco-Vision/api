@@ -8,18 +8,15 @@ use Illuminate\Support\Facades\Hash;
 
 class AccountManagementController extends Controller
 {
-    /**
-     * GET /api/admin/accounts
-     * List all accounts with optional filters (search, role).
-     */
+
     public function index(Request $request)
     {
         $users = User::withCount('scans')
             ->when($request->search, fn ($q) =>
                 $q->where(function ($q2) use ($request) {
                     $q2->where('name', 'like', "%{$request->search}%")
-                       ->orWhere('email', 'like', "%{$request->search}%")
-                       ->orWhere('username', 'like', "%{$request->search}%");
+                    ->orWhere('email', 'like', "%{$request->search}%")
+                    ->orWhere('username', 'like', "%{$request->search}%");
                 })
             )
             ->when($request->role, fn ($q) =>
@@ -28,7 +25,16 @@ class AccountManagementController extends Controller
             ->latest()
             ->paginate($request->per_page ?? 20);
 
-        return response()->json($users);
+        $counts = User::selectRaw('role, COUNT(*) as c')->groupBy('role')->pluck('c', 'role');
+
+        return response()->json(array_merge($users->toArray(), [
+            'stats' => [
+                'total'        => $counts->sum(),
+                'super_admins' => $counts['super_admin'] ?? 0,
+                'admins'       => $counts['admin'] ?? 0,
+                'foragers'     => $counts['forager'] ?? 0,
+            ],
+        ]));
     }
 
     /**
@@ -43,7 +49,7 @@ class AccountManagementController extends Controller
             'username'       => 'required|string|max:255|unique:users,username',
             'email'          => 'required|email|unique:users,email',
             'password'       => 'required|string|min:8',
-            'role'           => 'required|in:forager,admin',
+            'role'           => 'required|in:forager,admin,super_admin',
             'contact_number' => 'nullable|string|max:255',
             'address'        => 'nullable|string',
         ]);
@@ -81,8 +87,13 @@ class AccountManagementController extends Controller
      */
     public function update(Request $request, User $user)
     {
-        // Prevent editing the super_admin's own role
-        if ($user->id === $request->user()->id && $request->has('role') && $request->role !== 'super_admin') {
+        // Super admin roles can't be changed here, so ignore any role sent for them
+        if ($user->isSuperAdmin()) {
+            $request->request->remove('role');
+        }
+
+        // Prevent changing your own role
+        if ($user->id === $request->user()->id && $request->has('role') && $request->role !== $user->role) {
             return response()->json(['message' => 'You cannot change your own role.'], 403);
         }
 
@@ -91,12 +102,11 @@ class AccountManagementController extends Controller
             'last_name'      => 'sometimes|string|max:255',
             'username'       => "sometimes|string|max:255|unique:users,username,{$user->id}",
             'email'          => "sometimes|email|unique:users,email,{$user->id}",
-            'role'           => 'sometimes|in:forager,admin',
+            'role'           => 'sometimes|in:forager,admin,super_admin',
             'contact_number' => 'sometimes|nullable|string|max:255',
             'address'        => 'sometimes|nullable|string',
         ]);
 
-        // Auto-update name if first/last name provided
         if (isset($data['first_name']) || isset($data['last_name'])) {
             $data['name'] = ($data['first_name'] ?? $user->first_name) . ' ' . ($data['last_name'] ?? $user->last_name);
         }
