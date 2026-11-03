@@ -1,0 +1,10 @@
+app.{$DOMAIN} {
+    reverse_proxy web:3000
+}
+
+api.{$DOMAIN} {
+    request_body {
+        max_size 25MB
+    }
+    reverse_proxy api:8080
+}

@@ -12,12 +12,12 @@ class AdminRetrainController extends Controller
 {
     private function mlUrl(): string
     {
-        return rtrim(env('ML_API_URL', 'http://127.0.0.1:5000'), '/');
+        return rtrim(config('services.ml.url'), '/');
     }
 
     private function retrainKey(): string
     {
-        return env('RETRAIN_API_KEY', 'myco-retrain-secret');
+        return (string) config('services.ml.retrain_key');
     }
 
     /**

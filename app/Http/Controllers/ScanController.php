@@ -48,7 +48,7 @@ class ScanController extends Controller
         $path = $request->file('image')->store('scans', 'public');
 
         set_time_limit(120); // Give extra time for ML inference on CPU
-        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
+        $mlApiUrl = rtrim(config('services.ml.url'), '/');
         $speciesRecord = null;
 
         try {
@@ -110,7 +110,7 @@ class ScanController extends Controller
             'image' => 'required|image|max:10240',
         ]);
 
-        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
+        $mlApiUrl = rtrim(config('services.ml.url'), '/');
 
         try {
             $file = $request->file('image');

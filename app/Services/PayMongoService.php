@@ -87,7 +87,7 @@ class PayMongoService
             throw new \InvalidArgumentException("Invalid subscription plan: {$planKey}");
         }
 
-        $frontendUrl = rtrim(env('FRONTEND_URL', 'http://localhost:3000'), '/');
+        $frontendUrl = rtrim(config('services.frontend.url'), '/');
         $successUrl  = $successUrl ?: "{$frontendUrl}/users/subscription?status=success&session_id={CHECKOUT_SESSION_ID}";
         $cancelUrl   = $cancelUrl ?: "{$frontendUrl}/users/subscription?status=cancelled";
 
