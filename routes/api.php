@@ -1,0 +1,125 @@
+<?php
+
+use App\Http\Controllers\AccountManagementController;
+use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AdminRetrainController;
+use App\Http\Controllers\AdminSubscriptionController;
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\GoogleAuthController;
+use App\Http\Controllers\RefundController;
+use App\Http\Controllers\ScanController;
+use App\Http\Controllers\SpeciesController;
+use App\Http\Controllers\SubscriptionController;
+use Illuminate\Support\Facades\Route;
+
+// ── Public routes ──────────────────────────────────────────────────────────────
+Route::middleware('throttle:20,1')->group(function () {
+    Route::post('/register',       [AuthController::class, 'register']);
+    Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
+    Route::post('/login',          [AuthController::class, 'login']);
+    Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
+    Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
+    Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
+});
+
+// Public species listing (users can browse without logging in)
+Route::get('/species',       [SpeciesController::class, 'index']);
+Route::get('/species/{species}', [SpeciesController::class, 'show']);
+
+// Public subscription plans & PayMongo webhook
+Route::get('/subscription/plans', [SubscriptionController::class, 'plans']);
+Route::post('/paymongo/webhook',  [SubscriptionController::class, 'webhook']);
+
+// ── Authenticated routes ───────────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->group(function () {
+
+    // Auth
+    Route::post('/logout',           [AuthController::class, 'logout']);
+    Route::get('/me',                [AuthController::class, 'me']);
+    Route::put('/user/consent',      [AuthController::class, 'updateConsent']);
+    Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
+    Route::post('/change-password',  [AuthController::class, 'changePassword']);
+
+    // Subscriptions
+    Route::get('/subscription/status',    [SubscriptionController::class, 'status']);
+    Route::post('/subscription/checkout', [SubscriptionController::class, 'checkout']);
+    Route::post('/subscription/verify',   [SubscriptionController::class, 'verify']);
+    Route::post('/subscription/cancel',   [SubscriptionController::class, 'cancel']);
+
+    // Refunds (own)
+    Route::get('/refunds',                    [RefundController::class, 'mine']);
+    Route::post('/refunds',                   [RefundController::class, 'store'])->middleware('throttle:10,1');
+    Route::post('/refunds/{refund}/cancel',   [RefundController::class, 'withdraw']);
+
+    // Scans (own)
+    Route::get('/scans',          [ScanController::class, 'index']);
+    Route::post('/scans',         [ScanController::class, 'store']);
+    Route::get('/scans/{scan}',   [ScanController::class, 'show']);
+    Route::post('/scans/preview', [ScanController::class, 'preview']);
+    Route::patch('/scans/{scan}/location', [ScanController::class, 'updateLocation']);
+    Route::delete('/scans/{scan}',[ScanController::class, 'destroy']);
+
+    // ── Admin-only routes ────────────────────────────────────────────────────
+    Route::middleware('admin')->prefix('admin')->group(function () {
+
+        // Dashboard stats
+        Route::get('/dashboard', [AdminController::class, 'dashboard']);
+
+        // User management
+        Route::get('/users',           [AdminController::class, 'users']);
+        Route::get('/users/{user}',    [AdminController::class, 'showUser']);
+        Route::put('/users/{user}',    [AdminController::class, 'updateUser']);
+        Route::delete('/users/{user}', [AdminController::class, 'destroyUser']);
+
+        // Scan overview
+        Route::get('/scans', [AdminController::class, 'scans']);
+        Route::get('/scans/candidates', [AdminController::class, 'candidateScans']);
+
+        // Reports & Analytics
+        Route::get('/reports', [AdminController::class, 'reports']);
+
+        // AI Retraining
+        Route::get('/retrain/candidates', [AdminRetrainController::class, 'candidates']);
+        Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
+        Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
+
+        // Species management (read + write)
+        Route::get('/species',              [SpeciesController::class, 'index']);
+        Route::post('/species',             [SpeciesController::class, 'store']);
+        Route::put('/species/{species}',    [SpeciesController::class, 'update']);
+        Route::delete('/species/{species}', [SpeciesController::class, 'destroy']);
+
+        // Subscription management
+        Route::get('/subscriptions',                              [AdminSubscriptionController::class, 'index']);
+        Route::get('/subscriptions/stats',                        [AdminSubscriptionController::class, 'stats']);
+        Route::get('/subscriptions/events',                       [AdminSubscriptionController::class, 'events']);
+        Route::get('/subscriptions/user/{user}',                  [AdminSubscriptionController::class, 'userHistory']);
+        Route::post('/subscriptions/grant',                       [AdminSubscriptionController::class, 'grant']);
+        Route::post('/subscriptions/{subscription}/extend',       [AdminSubscriptionController::class, 'extend']);
+        Route::post('/subscriptions/{subscription}/cancel',       [AdminSubscriptionController::class, 'cancel']);
+        Route::post('/subscriptions/{subscription}/revoke',       [AdminSubscriptionController::class, 'revoke']);
+        Route::patch('/subscriptions/{subscription}/auto-renew',  [AdminSubscriptionController::class, 'toggleAutoRenew']);
+
+        // Refund review queue (approving is super admin only, see below)
+        Route::get('/refunds',                    [RefundController::class, 'index']);
+        Route::get('/refunds/stats',              [RefundController::class, 'stats']);
+        Route::post('/refunds/{refund}/reject',   [RefundController::class, 'reject']);
+        Route::post('/subscriptions/{subscription}/refund', [RefundController::class, 'adminCreate']);
+    });
+
+    // ── Super Admin-only routes ──────────────────────────────────────────────
+    Route::middleware('super_admin')->prefix('admin')->group(function () {
+
+        // Account management (full CRUD)
+        Route::get('/accounts',                        [AccountManagementController::class, 'index']);
+        Route::post('/accounts',                       [AccountManagementController::class, 'store']);
+        Route::get('/accounts/{user}',                 [AccountManagementController::class, 'show']);
+        Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
+        Route::delete('/accounts/{user}',              [AccountManagementController::class, 'destroy']);
+        Route::post('/accounts/{user}/reset-password', [AccountManagementController::class, 'resetPassword']);
+
+        // Approving a refund issues real money through PayMongo
+        Route::post('/refunds/{refund}/approve',       [RefundController::class, 'approve']);
+    });
+});
+

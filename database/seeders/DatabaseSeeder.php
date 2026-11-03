@@ -3,11 +3,13 @@
 namespace Database\Seeders;
 
 use App\Models\User;
-// use Illuminate\Database\Console\Seeds\WithoutModelEvents;
+use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
 {
+    use WithoutModelEvents;
+
     /**
      * Seed the application's database.
      */
@@ -15,9 +17,19 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
+        User::firstOrCreate(
+            ['email' => 'test@example.com'],
+            [
+                'name' => 'Test User',
+                'password' => '$2y$12$R8io71eIxWu4gKK/88DCnetiwgOoSHoD2s2/GqnKbq/9GgrTq8h7i',
+            ]
+        );
+
+        $this->call([
+            SuperAdminSeeder::class,
+            SpeciesSeeder::class,
+            ForagerSeeder::class,
         ]);
     }
+
 }
