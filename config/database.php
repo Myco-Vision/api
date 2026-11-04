@@ -97,6 +97,11 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => env('DB_SSLMODE', 'prefer'),
+            // Set DB_EMULATE_PREPARES=true when connecting through Supabase's
+            // transaction pooler (port 6543).
+            'options' => extension_loaded('pdo_pgsql') && env('DB_EMULATE_PREPARES', false)
+                ? [PDO::ATTR_EMULATE_PREPARES => true]
+                : [],
         ],
 
         'sqlsrv' => [

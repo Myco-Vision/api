@@ -7,6 +7,16 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (DB::getDriverName() === 'pgsql') {
+            // Postgres: Laravel's enum() is varchar + CHECK constraint. Drop the old
+            // constraint, migrate data, then add the new one.
+            DB::statement('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
+            DB::table('users')->where('role', 'user')->update(['role' => 'forager']);
+            DB::statement("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'forager'");
+            DB::statement("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('forager', 'admin', 'super_admin'))");
+            return;
+        }
+
         // Step 1: widen enum to include old + new values so no data is lost
         DB::statement("ALTER TABLE users MODIFY role ENUM('user', 'forager', 'admin', 'super_admin') NOT NULL DEFAULT 'forager'");
 
@@ -19,6 +29,15 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::getDriverName() === 'pgsql') {
+            DB::statement('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
+            DB::table('users')->where('role', 'forager')->update(['role' => 'user']);
+            DB::table('users')->where('role', 'super_admin')->update(['role' => 'admin']);
+            DB::statement("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user'");
+            DB::statement("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('user', 'admin'))");
+            return;
+        }
+
         // Widen again so 'user' is valid before we write it back
         DB::statement("ALTER TABLE users MODIFY role ENUM('user', 'forager', 'admin', 'super_admin') NOT NULL DEFAULT 'user'");
 
