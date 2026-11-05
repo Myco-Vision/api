@@ -36,4 +36,8 @@ if (! is_dir('/tmp/views')) {
     @mkdir('/tmp/views', 0777, true);
 }
 
+// Normalize script context so Laravel routes and path calculation work on Vercel
+$_SERVER['SCRIPT_NAME'] = '/index.php';
+$_SERVER['SCRIPT_FILENAME'] = __DIR__ . '/../public/index.php';
+
 require __DIR__ . '/../public/index.php';
