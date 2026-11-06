@@ -41,7 +41,7 @@ class AdminRetrainController extends Controller
             ->get()
             ->map(fn ($s) => [
                 'id'             => $s->id,
-                'image_url'      => asset('storage/' . $s->image_path),
+                'image_url'      => $s->image_url,
                 'image_path'     => $s->image_path,
                 'result_name'    => $s->result_name,
                 'confidence'     => round($s->confidence_level ?? 0),
@@ -56,7 +56,7 @@ class AdminRetrainController extends Controller
             ->get()
             ->map(fn ($s) => [
                 'id'             => $s->id,
-                'image_url'      => asset('storage/' . $s->image_path),
+                'image_url'      => $s->image_url,
                 'image_path'     => $s->image_path,
                 'result_name'    => $s->result_name,
                 'confidence'     => round($s->confidence_level ?? 0),
