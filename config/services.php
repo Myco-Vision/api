@@ -42,4 +42,22 @@ return [
         'api_url'        => env('PAYMONGO_API_URL', 'https://api.paymongo.com/v1'),
     ],
 
+    'google' => [
+        'client_id'     => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect'      => env('GOOGLE_REDIRECT_URI'),
+    ],
+
+    // Machine-learning service (Flask app in /algorithm).
+    // In Docker, ML_API_URL is http://ml:5000.
+    'ml' => [
+        'url'         => env('ML_API_URL', 'http://127.0.0.1:5000'),
+        'retrain_key' => env('RETRAIN_API_KEY', ''),
+    ],
+
+    // Public URL of the Nuxt frontend (CORS + payment redirects).
+    'frontend' => [
+        'url' => env('FRONTEND_URL', 'http://localhost:3000'),
+    ],
+
 ];

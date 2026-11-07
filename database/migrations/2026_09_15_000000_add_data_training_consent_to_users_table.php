@@ -12,8 +12,12 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            $table->boolean('allow_data_training')->default(false)->after('profile_photo');
-            $table->timestamp('data_training_consented_at')->nullable()->after('allow_data_training');
+            if (!Schema::hasColumn('users', 'allow_data_training')) {
+                $table->boolean('allow_data_training')->default(false)->after('profile_photo');
+            }
+            if (!Schema::hasColumn('users', 'data_training_consented_at')) {
+                $table->timestamp('data_training_consented_at')->nullable()->after('allow_data_training');
+            }
         });
     }
 
@@ -23,7 +27,13 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            $table->dropColumn(['allow_data_training', 'data_training_consented_at']);
+            $columns = array_filter(
+                ['allow_data_training', 'data_training_consented_at'],
+                fn ($col) => Schema::hasColumn('users', $col)
+            );
+            if (!empty($columns)) {
+                $table->dropColumn($columns);
+            }
         });
     }
 };

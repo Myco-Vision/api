@@ -1,0 +1,102 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ml:
+    build: ../../algorithm
+    restart: unless-stopped
+    environment:
+      # Required: App.py refuses to start without a real key
+      RETRAIN_API_KEY: ${RETRAIN_API_KEY:?Set RETRAIN_API_KEY in .env}
+    volumes:
+      # Retraining writes here, so both must survive rebuilds.
+      # Docker seeds an empty named volume from the image the first time.
+      - ml_models:/app/models
+      - ml_dataset:/app/mushroom_dataset
+
+  api:
+    build: ..
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ml:
+        condition: service_started
+    environment:
+      APP_NAME: MycoVision
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_KEY: ${APP_KEY:?Set APP_KEY in .env}
+      APP_URL: https://api.${DOMAIN}
+      FRONTEND_URL: https://app.${DOMAIN}
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      ML_API_URL: http://ml:5000
+      RETRAIN_API_KEY: ${RETRAIN_API_KEY}
+      SESSION_DRIVER: database
+      CACHE_STORE: database
+      QUEUE_CONNECTION: database
+      LOG_CHANNEL: stderr
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
+      PAYMONGO_PUBLIC_KEY: ${PAYMONGO_PUBLIC_KEY}
+      PAYMONGO_SECRET_KEY: ${PAYMONGO_SECRET_KEY}
+      PAYMONGO_WEBHOOK_SECRET: ${PAYMONGO_WEBHOOK_SECRET}
+      # serversideup/php automation
+      AUTORUN_ENABLED: "true"
+      AUTORUN_LARAVEL_MIGRATION: "true"
+      AUTORUN_LARAVEL_STORAGE_LINK: "true"
+      PHP_UPLOAD_MAX_FILE_SIZE: 20M
+      PHP_POST_MAX_SIZE: 25M
+    volumes:
+      - api_storage:/var/www/html/storage/app/public
+
+  web:
+    build: ../../view
+    restart: unless-stopped
+    environment:
+      NUXT_PUBLIC_API_BASE: https://api.${DOMAIN}/api
+      NUXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - api
+
+volumes:
+  db_data:
+  ml_models:
+  ml_dataset:
+  api_storage:
+  caddy_data:
+  caddy_config:

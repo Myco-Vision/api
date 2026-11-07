@@ -22,3 +22,7 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+/venv
+
+# Temporary Supabase migration settings (contains a password)
+.env.supabase

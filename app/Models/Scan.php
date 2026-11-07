@@ -19,8 +19,38 @@ class Scan extends Model
         'latitude',
         'longitude',
         'location_name',
+        'location_source',
         'notes',
+        'retrained_at',
     ];
+
+    protected $casts = [
+        'retrained_at' => 'datetime',
+    ];
+
+    protected $appends = [
+        'image_url',
+    ];
+
+    public function getImageUrlAttribute(): string
+    {
+        if (!$this->image_path) {
+            return '';
+        }
+
+        // If it's already a full URL
+        if (str_starts_with($this->image_path, 'http://') || str_starts_with($this->image_path, 'https://')) {
+            return $this->image_path;
+        }
+
+        // Direct Supabase storage URL when available
+        $supabaseUrl = env('AWS_URL');
+        if ($supabaseUrl && config('filesystems.disks.public.driver') === 's3') {
+            return rtrim($supabaseUrl, '/') . '/' . ltrim($this->image_path, '/');
+        }
+
+        return url('/storage/' . ltrim($this->image_path, '/'));
+    }
 
     public function user()
     {

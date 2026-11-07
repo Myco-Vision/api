@@ -5,6 +5,8 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminRetrainController;
 use App\Http\Controllers\AdminSubscriptionController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\GoogleAuthController;
+use App\Http\Controllers\RefundController;
 use App\Http\Controllers\ScanController;
 use App\Http\Controllers\SpeciesController;
 use App\Http\Controllers\SubscriptionController;
@@ -12,8 +14,12 @@ use Illuminate\Support\Facades\Route;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
 Route::middleware('throttle:20,1')->group(function () {
-    Route::post('/register', [AuthController::class, 'register']);
-    Route::post('/login',    [AuthController::class, 'login']);
+    Route::post('/register',       [AuthController::class, 'register']);
+    Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
+    Route::post('/login',          [AuthController::class, 'login']);
+    Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
+    Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
+    Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
 });
 
 // Public species listing (users can browse without logging in)
@@ -28,15 +34,22 @@ Route::post('/paymongo/webhook',  [SubscriptionController::class, 'webhook']);
 Route::middleware('auth:sanctum')->group(function () {
 
     // Auth
-    Route::post('/logout',       [AuthController::class, 'logout']);
-    Route::get('/me',            [AuthController::class, 'me']);
-    Route::put('/user/consent',  [AuthController::class, 'updateConsent']);
+    Route::post('/logout',           [AuthController::class, 'logout']);
+    Route::get('/me',                [AuthController::class, 'me']);
+    Route::put('/user/consent',      [AuthController::class, 'updateConsent']);
+    Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
+    Route::post('/change-password',  [AuthController::class, 'changePassword']);
 
     // Subscriptions
     Route::get('/subscription/status',    [SubscriptionController::class, 'status']);
     Route::post('/subscription/checkout', [SubscriptionController::class, 'checkout']);
     Route::post('/subscription/verify',   [SubscriptionController::class, 'verify']);
     Route::post('/subscription/cancel',   [SubscriptionController::class, 'cancel']);
+
+    // Refunds (own)
+    Route::get('/refunds',                    [RefundController::class, 'mine']);
+    Route::post('/refunds',                   [RefundController::class, 'store'])->middleware('throttle:10,1');
+    Route::post('/refunds/{refund}/cancel',   [RefundController::class, 'withdraw']);
 
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);
@@ -85,6 +98,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/subscriptions/{subscription}/cancel',       [AdminSubscriptionController::class, 'cancel']);
         Route::post('/subscriptions/{subscription}/revoke',       [AdminSubscriptionController::class, 'revoke']);
         Route::patch('/subscriptions/{subscription}/auto-renew',  [AdminSubscriptionController::class, 'toggleAutoRenew']);
+
+        // Refund review queue (approving is super admin only, see below)
+        Route::get('/refunds',                    [RefundController::class, 'index']);
+        Route::get('/refunds/stats',              [RefundController::class, 'stats']);
+        Route::post('/refunds/{refund}/reject',   [RefundController::class, 'reject']);
+        Route::post('/subscriptions/{subscription}/refund', [RefundController::class, 'adminCreate']);
     });
 
     // ── Super Admin-only routes ──────────────────────────────────────────────
@@ -97,6 +116,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
         Route::delete('/accounts/{user}',              [AccountManagementController::class, 'destroy']);
         Route::post('/accounts/{user}/reset-password', [AccountManagementController::class, 'resetPassword']);
+
+        // Approving a refund issues real money through PayMongo
+        Route::post('/refunds/{refund}/approve',       [RefundController::class, 'approve']);
     });
 });
 

@@ -21,6 +21,8 @@ class User extends Authenticatable
         'last_name',
         'username',
         'email',
+        'google_id',
+        'needs_profile_completion',
         'contact_number',
         'address',
         'password',
@@ -45,8 +47,9 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password'          => 'hashed',
+            'email_verified_at'        => 'datetime',
+            'password'                 => 'hashed',
+            'needs_profile_completion' => 'boolean',
         ];
     }
 

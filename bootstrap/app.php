@@ -14,6 +14,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Running behind a reverse proxy (Caddy) in Docker.
+        $middleware->trustProxies(at: '*');
+
         $middleware->alias([
             'admin'       => AdminMiddleware::class,
             'super_admin' => SuperAdminMiddleware::class,

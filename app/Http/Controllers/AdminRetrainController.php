@@ -12,12 +12,12 @@ class AdminRetrainController extends Controller
 {
     private function mlUrl(): string
     {
-        return rtrim(env('ML_API_URL', 'http://127.0.0.1:5000'), '/');
+        return rtrim(config('services.ml.url'), '/');
     }
 
     private function retrainKey(): string
     {
-        return env('RETRAIN_API_KEY', 'myco-retrain-secret');
+        return (string) config('services.ml.retrain_key');
     }
 
     /**
@@ -28,10 +28,12 @@ class AdminRetrainController extends Controller
      */
     public function candidates(Request $request)
     {
-        // Only scans from users who gave data-training consent
+        // Only scans from users who gave data-training consent and that
+        // have not already been used in a previous retrain run
         $base = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
             ->whereIn('result_classification', ['edible', 'poisonous'])
-            ->whereNotNull('image_path');
+            ->whereNotNull('image_path')
+            ->whereNull('retrained_at');
 
         $edible = (clone $base)->where('result_classification', 'edible')
             ->with('user:id,name')
@@ -39,7 +41,7 @@ class AdminRetrainController extends Controller
             ->get()
             ->map(fn ($s) => [
                 'id'             => $s->id,
-                'image_url'      => asset('storage/' . $s->image_path),
+                'image_url'      => $s->image_url,
                 'image_path'     => $s->image_path,
                 'result_name'    => $s->result_name,
                 'confidence'     => round($s->confidence_level ?? 0),
@@ -54,7 +56,7 @@ class AdminRetrainController extends Controller
             ->get()
             ->map(fn ($s) => [
                 'id'             => $s->id,
-                'image_url'      => asset('storage/' . $s->image_path),
+                'image_url'      => $s->image_url,
                 'image_path'     => $s->image_path,
                 'result_name'    => $s->result_name,
                 'confidence'     => round($s->confidence_level ?? 0),
@@ -95,9 +97,12 @@ class AdminRetrainController extends Controller
         ]);
 
         // ── Build query ────────────────────────────────────────────────────
+        // Scans already used in a previous run (retrained_at set) are never re-sent,
+        // even if their IDs are submitted (e.g. from a stale browser tab).
         $baseQuery = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
             ->whereIn('result_classification', ['edible', 'poisonous'])
-            ->whereNotNull('image_path');
+            ->whereNotNull('image_path')
+            ->whereNull('retrained_at');
 
         if ($request->has('edible_ids') || $request->has('poisonous_ids')) {
             $edibleIds    = $request->input('edible_ids', []);
@@ -148,11 +153,13 @@ class AdminRetrainController extends Controller
         // (Laravel's Http client doesn't support mixed attach + multipart easily,
         //  so we use a raw Guzzle multipart array.)
         $multipart = [];
+        $sentScanIds = [];
         foreach ($scans as $scan) {
             $diskPath = Storage::disk('public')->path($scan->image_path);
             if (!file_exists($diskPath)) {
                 continue;
             }
+            $sentScanIds[] = $scan->id;
             $multipart[] = [
                 'name'     => 'images[]',
                 'contents' => fopen($diskPath, 'r'),
@@ -178,6 +185,10 @@ class AdminRetrainController extends Controller
             ]);
 
             $body = json_decode($response->getBody()->getContents(), true);
+
+            // Flask accepted the job: its images are now in the training dataset,
+            // so flag these scans to keep them out of future retrain runs.
+            Scan::whereIn('id', $sentScanIds)->update(['retrained_at' => now()]);
 
             return response()->json(array_merge($body, [
                 'edible_queued'    => $edibleCount,
