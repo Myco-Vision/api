@@ -44,50 +44,61 @@ class ScanController extends Controller
             ], 403);
         }
 
-        $path = $request->file('image')->store('scans', 'public');
+        $file = $request->file('image');
+        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
 
         set_time_limit(120); // Give extra time for ML inference on CPU
-        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
-        $speciesRecord = null;
 
+        // 1. Run ML inference first using the uploaded temp file (not yet written to public storage)
         try {
-            // Send the uploaded image to the Python FastAPI service (90s timeout)
             $response = \Illuminate\Support\Facades\Http::timeout(90)->attach(
-                'image', file_get_contents($request->file('image')->path()), $request->file('image')->getClientOriginalName()
+                'image', file_get_contents($file->path()), $file->getClientOriginalName()
             )->post("{$mlApiUrl}/classify");
 
-            if ($response->successful()) {
-                $mlData = $response->json();
-                $resultName = $mlData['result_name'] ?? 'Unknown';
-                $confidence = $mlData['confidence_level'] ?? 0;
-
-                // Use the ML service's own classification directly
-                $resultClass = $mlData['result_classification'] ?? 'unknown';
-
-                // Try to resolve a matching species record for the relation
-                $speciesRecord = \App\Models\Species::where('scientific_name', $resultName)
-                                    ->orWhere('name', $resultName)
-                                    ->first();
-            } else {
+            if (!$response->successful()) {
                 Log::error('ML API Error response', [
                     'status' => $response->status(),
-                    'body' => $response->body()
+                    'body'   => $response->body()
                 ]);
-                $resultName = 'API Error';
-                $resultClass = 'unknown';
-                $confidence = 0;
+                return response()->json([
+                    'message' => 'Image classification failed. Please try again.'
+                ], 502);
             }
+
+            $mlData = $response->json();
         } catch (\Exception $e) {
             Log::error('ML API Exception', [
                 'message' => $e->getMessage()
             ]);
-            $resultName = 'ML Service Offline';
-            $resultClass = 'unknown';
-            $confidence = 0;
+            return response()->json([
+                'message' => 'The mushroom classification service is currently offline. Please try again shortly.'
+            ], 503);
         }
 
+        // 2. Reject non-mushrooms before touching disk or database
+        $resultClass = $mlData['result_classification'] ?? 'unknown';
+        if ($resultClass === 'not_mushroom') {
+        return response()->json([
+            'error'                 => 'NOT_MUSHROOM',   // add this
+            'message'               => 'No mushroom detected in the image. Please take a clearer photo of a mushroom.',
+            'result_classification' => 'not_mushroom',
+            'confidence_level'      => $mlData['confidence_level'] ?? 0,
+        ], 422);
+    }
+
+        // 3. Inference passed and confirmed mushroom — save to storage and database
+        $path = $file->store('scans', 'public');
+
+        $resultName = $mlData['result_name'] ?? 'Unknown';
+        $confidence = $mlData['confidence_level'] ?? 0;
+
+        // Try to resolve a matching species record for the relation
+        $speciesRecord = \App\Models\Species::where('scientific_name', $resultName)
+                            ->orWhere('name', $resultName)
+                            ->first();
+
         $scan = Scan::create([
-            'user_id'               => $request->user()->id,
+            'user_id'               => $user->id,
             'species_id'            => $speciesRecord->id ?? null,
             'image_path'            => $path,
             'result_name'           => $resultName,
