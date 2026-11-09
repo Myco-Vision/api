@@ -8,6 +8,7 @@ class RefundRequest extends Model
 {
     protected $fillable = [
         'user_id',
+        'deleted_user_email',
         'subscription_id',
         'reason_type',
         'reason',
@@ -36,7 +37,7 @@ class RefundRequest extends Model
 
     public function user()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class)->withDefault(['name' => 'Deleted user', 'username' => null, 'email' => null]);
     }
 
     public function subscription()

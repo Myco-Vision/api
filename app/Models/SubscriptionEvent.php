@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class SubscriptionEvent extends Model
 {
-    protected $fillable = ['user_id', 'subscription_id', 'admin_id', 'action', 'details'];
+    protected $fillable = ['user_id', 'deleted_user_email', 'subscription_id', 'admin_id', 'action', 'details'];
 
     protected function casts(): array
     {
@@ -15,7 +15,7 @@ class SubscriptionEvent extends Model
 
     public function user()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class)->withDefault(['name' => 'Deleted user', 'username' => null, 'email' => null]);
     }
 
     public function admin()
@@ -28,7 +28,7 @@ class SubscriptionEvent extends Model
         return $this->belongsTo(Subscription::class);
     }
 
-    public static function log(int $userId, string $action, ?int $subscriptionId = null, ?int $adminId = null, array $details = []): self
+    public static function log(?int $userId, string $action, ?int $subscriptionId = null, ?int $adminId = null, array $details = []): self
     {
         return static::create([
             'user_id'         => $userId,

@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\SubscriptionEvent;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -212,5 +215,147 @@ class AuthController extends Controller
         $user->update(['password' => $data['password']]);
 
         return response()->json(['message' => 'Password updated successfully.']);
+    }
+
+    // POST /api/user/profile (auth:sanctum)
+    public function updateProfile(Request $request)
+    {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'first_name'     => 'required|string|max:255',
+            'last_name'      => 'required|string|max:255',
+            'username'       => 'required|string|max:255|unique:users,username,' . $user->id,
+            'contact_number' => ['required', 'string', 'max:20', 'regex:/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/'],
+            'address'        => ['required', 'string', 'max:500', 'not_regex:/@/'],
+        ], [
+            'address.not_regex'    => 'Please enter a street address, not an email.',
+            'contact_number.regex' => 'Please enter a valid Philippine mobile number (e.g. 0917 123 4567 or +63 917 123 4567).',
+        ]);
+
+        $user->update([
+            'name'           => trim($data['first_name']) . ' ' . trim($data['last_name']),
+            'first_name'     => trim($data['first_name']),
+            'last_name'      => trim($data['last_name']),
+            'username'       => $data['username'],
+            'contact_number' => $data['contact_number'],
+            'address'        => $data['address'],
+        ]);
+
+        return response()->json([
+            'message' => 'Profile updated successfully.',
+            'user'    => $user->fresh(),
+        ]);
+    }
+
+    // POST /api/user/avatar (auth:sanctum)
+    public function updateAvatar(Request $request)
+    {
+        $request->validate([
+            'avatar' => 'required|file|mimes:jpg,jpeg,png,webp|max:5120',
+        ]);
+
+        $user = $request->user();
+        $file = $request->file('avatar');
+
+        $src = @imagecreatefromstring((string) file_get_contents($file->getRealPath()));
+        if ($src === false) {
+            throw ValidationException::withMessages(['avatar' => ['The image could not be processed.']]);
+        }
+
+        // Center-crop to a square, then resize to 256x256 (re-encoding also strips metadata)
+        $size = 256;
+        $w = imagesx($src);
+        $h = imagesy($src);
+        $side = min($w, $h);
+        $dst = imagecreatetruecolor($size, $size);
+        imagefill($dst, 0, 0, imagecolorallocate($dst, 255, 255, 255)); // flatten transparency
+        imagecopyresampled($dst, $src, 0, 0, intdiv($w - $side, 2), intdiv($h - $side, 2), $size, $size, $side, $side);
+
+        ob_start();
+        imagejpeg($dst, null, 85);
+        $jpeg = ob_get_clean();
+        imagedestroy($src);
+        imagedestroy($dst);
+
+        $path = 'avatars/' . $user->id . '_' . Str::random(16) . '.jpg';
+        $disk = Storage::disk('public');
+        $disk->put($path, $jpeg);
+
+        // Remove the previous avatar if it was a locally stored file (not a Google URL)
+        $old = $user->profile_photo;
+        if ($old && ! preg_match('#^https?://#i', $old)) {
+            $disk->delete($old);
+        }
+
+        $user->update(['profile_photo' => $path]);
+
+        return response()->json([
+            'message' => 'Profile photo updated successfully.',
+            'user'    => $user->fresh(),
+        ]);
+    }
+
+    // DELETE /api/user (auth:sanctum) — self-service account deletion
+    public function deleteAccount(Request $request)
+    {
+        $data = $request->validate([
+            'password' => 'required|string',
+        ]);
+
+        $user = $request->user();
+
+        if (! Hash::check($data['password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'password' => ['The password is incorrect.'],
+            ]);
+        }
+
+        if ($user->isAdmin()) {
+            return response()->json([
+                'message' => 'Admin accounts cannot be deleted here. Contact a Super Admin.',
+            ], 403);
+        }
+
+        // Collect stored files before the rows disappear
+        $imagePaths = $user->scans()->pluck('image_path')->filter()->all();
+        $photo = $user->profile_photo;
+
+        DB::transaction(function () use ($user) {
+            // Billing records are retained for accounting/disputes: stamp the email,
+            // end any active plan, and let the FK null out user_id on delete.
+            $email = $user->email;
+            $user->subscriptions()->get()->each(function ($sub) use ($user, $email) {
+                $changes = ['deleted_user_email' => $email];
+                if ($sub->status === 'active') {
+                    $changes += [
+                        'status'       => 'cancelled',
+                        'auto_renew'   => false,
+                        'cancelled_at' => now(),
+                    ];
+                    SubscriptionEvent::log($user->id, 'cancelled', $sub->id, null, [
+                        'reason' => 'account_deleted_by_user',
+                    ]);
+                }
+                $sub->update($changes);
+            });
+            $user->refundRequests()->update(['deleted_user_email' => $email]);
+            SubscriptionEvent::where('user_id', $user->id)->update(['deleted_user_email' => $email]);
+
+            $user->tokens()->delete();
+            $user->scans()->delete();
+            $user->delete();
+        });
+
+        // Remove files only after the DB commit succeeded
+        $disk = Storage::disk('public');
+        foreach ($imagePaths as $path) {
+            $disk->delete($path);
+        }
+        if ($photo && ! preg_match('#^https?://#i', $photo)) {
+            $disk->delete($photo);
+        }
+
+        return response()->json(['message' => 'Your account has been deleted.']);
     }
 }

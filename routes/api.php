@@ -39,6 +39,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/user/consent',      [AuthController::class, 'updateConsent']);
     Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
     Route::post('/change-password',  [AuthController::class, 'changePassword']);
+    Route::post('/user/profile',     [AuthController::class, 'updateProfile']);
+    Route::post('/user/avatar',      [AuthController::class, 'updateAvatar'])->middleware('throttle:10,1');
+    Route::delete('/user',           [AuthController::class, 'deleteAccount'])->middleware('throttle:5,1');
 
     // Subscriptions
     Route::get('/subscription/status',    [SubscriptionController::class, 'status']);
