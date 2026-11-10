@@ -92,11 +92,15 @@ class ScanController extends Controller
         // 3. Inference passed and confirmed mushroom — save to storage and database
         $path = $file->store('scans', 'public');
 
-        $resultName = $mlData['result_name'] ?? 'Unknown';
-        $confidence = $mlData['confidence_level'] ?? 0;
+        $resultName     = $mlData['result_name'] ?? 'Unknown';
+        $scientificName = $mlData['scientific_name'] ?? $resultName;
+        $commonName     = $mlData['common_name'] ?? $resultName;
+        $confidence     = $mlData['confidence_level'] ?? 0;
 
         // Try to resolve a matching species record for the relation
-        $speciesRecord = \App\Models\Species::where('scientific_name', $resultName)
+        $speciesRecord = \App\Models\Species::where('scientific_name', $scientificName)
+                            ->orWhere('scientific_name', $resultName)
+                            ->orWhere('name', $commonName)
                             ->orWhere('name', $resultName)
                             ->first();
 

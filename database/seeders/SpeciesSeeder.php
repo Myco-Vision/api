@@ -38,6 +38,27 @@ class SpeciesSeeder extends Seeder
                 'description' => 'A small yellow mushroom often found in flowerpots and greenhouses. It is toxic if ingested.',
                 'habitat' => 'Flowerpots, greenhouses, and nutrient-rich soil',
             ],
+            [
+                'name' => 'Oyster Mushroom',
+                'scientific_name' => 'Pleurotus ostreatus',
+                'classification' => 'edible',
+                'description' => 'A common edible mushroom with fan- or oyster-shaped caps. Widely cultivated and found in the wild on dead or dying hardwood trees.',
+                'habitat' => 'Decaying hardwood logs and tree trunks',
+            ],
+            [
+                'name' => 'Phoenix Oyster',
+                'scientific_name' => 'Pleurotus pulmonarius',
+                'classification' => 'edible',
+                'description' => 'Also known as the Indian Oyster or Phoenix Mushroom, a pale, warm-weather oyster mushroom that is choice edible.',
+                'habitat' => 'Subtropical and tropical decaying hardwood logs',
+            ],
+            [
+                'name' => 'Rustgill',
+                'scientific_name' => 'Gymnopilus',
+                'classification' => 'poisonous',
+                'description' => 'A genus of gilled mushrooms with rusty-orange spore prints. Many species are bitter and several contain neuroactive or toxic compounds.',
+                'habitat' => 'Dead wood, stumps, and decaying palm or hardwood logs',
+            ],
         ];
 
         foreach ($species as $item) {
