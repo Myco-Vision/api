@@ -66,8 +66,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // ── Admin-only routes ────────────────────────────────────────────────────
     Route::middleware('admin')->prefix('admin')->group(function () {
 
-        // Dashboard stats
-        Route::get('/dashboard', [AdminController::class, 'dashboard']);
+        // Dashboard stats & alerts
+        Route::get('/dashboard',     [AdminController::class, 'dashboard']);
+        Route::get('/notifications', [AdminController::class, 'notifications']);
 
         // User management
         Route::get('/users',           [AdminController::class, 'users']);

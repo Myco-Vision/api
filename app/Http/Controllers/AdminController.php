@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\RefundRequest;
 use App\Models\Scan;
 use App\Models\Species;
 use App\Models\User;
@@ -272,6 +273,104 @@ class AdminController extends Controller
                 ['label' => '<50%',    'pct' => round(($confLow / $confTotal) * 100), 'color' => '#ef4444'],
             ],
             'top_users'      => $topUsers,
+        ]);
+    }
+
+    // GET /api/admin/notifications — lightweight actionable alert counts
+    public function notifications(Request $request)
+    {
+        $isSuperAdmin = $request->user()?->role === 'super_admin';
+        $items = [];
+
+        $pendingRefunds = RefundRequest::whereIn('status', ['pending', 'processing'])->count();
+        if ($pendingRefunds > 0) {
+            $items[] = [
+                'key'      => 'pending_refunds',
+                'title'    => 'Pending Refund Requests',
+                'subtitle' => $pendingRefunds === 1
+                    ? '1 refund request awaiting review'
+                    : "{$pendingRefunds} refund requests awaiting review",
+                'count'    => $pendingRefunds,
+                'tone'     => 'amber',
+                'route'    => '/admin/subscriptions',
+            ];
+        }
+
+        $poisonous24h = Scan::where('result_classification', 'poisonous')
+            ->where('created_at', '>=', now()->subDay())
+            ->count();
+        if ($poisonous24h > 0) {
+            $items[] = [
+                'key'      => 'poisonous_scans',
+                'title'    => 'Poisonous Scans (24h)',
+                'subtitle' => $poisonous24h === 1
+                    ? '1 poisonous specimen logged today'
+                    : "{$poisonous24h} poisonous specimens logged today",
+                'count'    => $poisonous24h,
+                'tone'     => 'red',
+                'route'    => '/admin/scans',
+            ];
+        }
+
+        $unknown24h = Scan::where(function ($q) {
+                $q->whereNull('result_classification')
+                  ->orWhere('result_classification', 'unknown');
+            })
+            ->where('created_at', '>=', now()->subDay())
+            ->count();
+        if ($unknown24h > 0) {
+            $items[] = [
+                'key'      => 'unknown_scans',
+                'title'    => 'Unclassified / Failed Scans (24h)',
+                'subtitle' => $unknown24h === 1
+                    ? '1 scan returned unknown or error'
+                    : "{$unknown24h} scans returned unknown or error",
+                'count'    => $unknown24h,
+                'tone'     => 'slate',
+                'route'    => '/admin/scans',
+            ];
+        }
+
+        if ($isSuperAdmin) {
+            $retrainCandidates = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
+                ->whereIn('result_classification', ['edible', 'poisonous'])
+                ->whereNotNull('image_path')
+                ->whereNull('retrained_at')
+                ->count();
+            if ($retrainCandidates > 0) {
+                $items[] = [
+                    'key'      => 'retrain_candidates',
+                    'title'    => 'AI Retrain Candidates Ready',
+                    'subtitle' => $retrainCandidates >= 20
+                        ? "{$retrainCandidates} consented images ready (recommended 20+ met)"
+                        : "{$retrainCandidates} consented images queued (20 recommended)",
+                    'count'    => $retrainCandidates,
+                    'tone'     => 'emerald',
+                    'route'    => '/admin/retrain',
+                ];
+            }
+
+            $unlinkedSpecies = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
+                ->whereNull('species_id')
+                ->whereIn('result_classification', ['edible', 'poisonous'])
+                ->count();
+            if ($unlinkedSpecies > 0) {
+                $items[] = [
+                    'key'      => 'unlinked_species',
+                    'title'    => 'Candidate Species Not in DB',
+                    'subtitle' => $unlinkedSpecies === 1
+                        ? '1 consented scan ready for species catalog review'
+                        : "{$unlinkedSpecies} consented scans ready for species catalog review",
+                    'count'    => $unlinkedSpecies,
+                    'tone'     => 'blue',
+                    'route'    => '/admin/species',
+                ];
+            }
+        }
+
+        return response()->json([
+            'total_count' => count($items),
+            'items'       => $items,
         ]);
     }
 }
