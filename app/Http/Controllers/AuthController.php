@@ -151,6 +151,26 @@ class AuthController extends Controller
         return response()->json($request->user());
     }
 
+    // PUT /api/me
+    public function updateMe(Request $request)
+    {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'first_name' => 'sometimes|string|max:255',
+            'last_name'  => 'sometimes|string|max:255',
+            'username'   => 'sometimes|string|max:255|unique:users,username,' . $user->id,
+        ]);
+
+        if (isset($data['first_name']) || isset($data['last_name'])) {
+            $data['name'] = trim(($data['first_name'] ?? $user->first_name) . ' ' . ($data['last_name'] ?? $user->last_name));
+        }
+
+        $user->update($data);
+
+        return response()->json($user->fresh());
+    }
+
     // PUT /api/user/consent
     public function updateConsent(Request $request)
     {
