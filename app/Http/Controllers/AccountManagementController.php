@@ -59,12 +59,14 @@ class AccountManagementController extends Controller
             'first_name'     => $data['first_name'],
             'last_name'      => $data['last_name'],
             'username'       => $data['username'],
-            'email'          => $data['email'],
+            'email'          => strtolower(trim($data['email'])),
             'password'       => $data['password'],
             'role'           => $data['role'],
             'contact_number' => $data['contact_number'] ?? '',
             'address'        => $data['address'] ?? '',
         ]);
+
+        $user->markEmailAsVerified();
 
         return response()->json([
             'message' => 'Account created successfully.',

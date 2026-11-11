@@ -32,7 +32,7 @@ class GoogleAuthController extends Controller
         $payload = $response->json();
 
         $googleId = $payload['id'];
-        $email    = $payload['email'] ?? null;
+        $email    = isset($payload['email']) ? strtolower(trim($payload['email'])) : null;
         $name     = $payload['name'] ?? '';
         $picture  = $payload['picture'] ?? null;
 
@@ -87,6 +87,11 @@ class GoogleAuthController extends Controller
             ]);
 
             $needsCompletion = true;
+        }
+
+        // Google already verified ownership of this email address
+        if (! $user->hasVerifiedEmail()) {
+            $user->markEmailAsVerified();
         }
 
         // Revoke old tokens and issue a fresh one

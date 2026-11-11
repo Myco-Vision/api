@@ -20,6 +20,8 @@ Route::middleware('throttle:20,1')->group(function () {
     Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
     Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
     Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
+    Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
+    Route::post('/email/verification-notification', [AuthController::class, 'resendVerification'])->middleware('throttle:6,1');
 });
 
 // Public species listing (users can browse without logging in)

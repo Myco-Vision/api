@@ -4,11 +4,15 @@ namespace App\Http\Controllers;
 
 use App\Models\SubscriptionEvent;
 use App\Models\User;
+use App\Rules\LegitimateEmail;
+use Illuminate\Auth\Events\Verified;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -17,62 +21,167 @@ class AuthController extends Controller
     // POST /api/register
     public function register(Request $request)
     {
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
+        ]);
+
         $data = $request->validate([
             'first_name'     => 'required|string|max:255',
             'last_name'      => 'required|string|max:255',
             'username'       => 'required|string|max:255|unique:users,username',
-            'email'          => 'required|email|unique:users,email',
+            'email'          => ['required', 'string', 'email:rfc,dns', 'max:255', new LegitimateEmail(), 'unique:users,email'],
             'contact_number' => ['required', 'string', 'max:20', 'regex:/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/'],
             'address'        => 'required|string',
             'password'       => 'required|string|min:8|confirmed',
         ], [
+            'email.email'          => 'Please enter a valid, deliverable email address.',
             'contact_number.regex' => 'Please enter a valid Philippine mobile number (e.g. 0917 123 4567 or +63 917 123 4567).',
         ]);
 
-        $user = User::create([
-            'name'           => $data['first_name'] . ' ' . $data['last_name'],
-            'first_name'     => $data['first_name'],
-            'last_name'      => $data['last_name'],
-            'username'       => $data['username'],
-            'email'          => $data['email'],
-            'contact_number' => $data['contact_number'],
-            'address'        => $data['address'],
-            'password'       => $data['password'],
-            'role'           => 'forager',
-        ]);
+        try {
+            $user = DB::transaction(function () use ($data) {
+                $user = User::create([
+                    'name'           => $data['first_name'] . ' ' . $data['last_name'],
+                    'first_name'     => $data['first_name'],
+                    'last_name'      => $data['last_name'],
+                    'username'       => $data['username'],
+                    'email'          => $data['email'],
+                    'contact_number' => $data['contact_number'],
+                    'address'        => $data['address'],
+                    'password'       => $data['password'],
+                    'role'           => 'forager',
+                ]);
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+                $user->sendEmailVerificationNotification();
+
+                return $user;
+            });
+        } catch (\Throwable $e) {
+            Log::error('Registration verification email failed', ['message' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Could not send verification email to that address. Please check your email and try again.',
+            ], 500);
+        }
 
         return response()->json([
-            'message' => 'Registration successful.',
-            'user'    => $user,
-            'token'   => $token,
+            'message'               => 'Registration successful. Please verify your email address using the link sent to your inbox before signing in.',
+            'requires_verification' => true,
+            'email'                 => $user->email,
         ], 201);
     }
 
     // GET /api/register/check-email
     public function checkEmail(Request $request)
     {
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
+        ]);
+
         $data = $request->validate([
-            'email' => 'required|email',
+            'email' => ['required', 'string', 'email:rfc,dns', 'max:255', new LegitimateEmail()],
+        ], [
+            'email.email' => 'Please enter a valid, deliverable email address.',
         ]);
 
         $taken = User::where('email', $data['email'])->exists();
 
         return response()->json([
             'available' => ! $taken,
-            'message'    => $taken ? 'This email is already registered.' : 'Email is available.',
+            'message'   => $taken ? 'This email is already registered.' : 'Email is available.',
+        ]);
+    }
+
+    // GET /api/email/verify/{id}/{hash}
+    public function verifyEmail(Request $request, int $id, string $hash)
+    {
+        if (! URL::hasValidRelativeSignature($request)) {
+            return response()->json([
+                'message' => 'This verification link is invalid or has expired. Please request a new verification email.',
+            ], 403);
+        }
+
+        $user = User::find($id);
+        if (! $user || ! hash_equals(sha1($user->getEmailForVerification()), (string) $hash)) {
+            return response()->json([
+                'message' => 'Invalid email verification link.',
+            ], 403);
+        }
+
+        $alreadyVerified = $user->hasVerifiedEmail();
+        if (! $alreadyVerified) {
+            $user->markEmailAsVerified();
+            event(new Verified($user));
+        }
+
+        $user->tokens()->delete();
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        return response()->json([
+            'message'          => $alreadyVerified
+                ? 'Your email address is already verified.'
+                : 'Email verified successfully! Your account is now active.',
+            'already_verified' => $alreadyVerified,
+            'user'             => $user->fresh(),
+            'token'            => $token,
+        ]);
+    }
+
+    // POST /api/email/verification-notification
+    public function resendVerification(Request $request)
+    {
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
+        ]);
+
+        $data = $request->validate([
+            'email' => ['required', 'string', 'email:rfc,dns', new LegitimateEmail()],
+        ], [
+            'email.email' => 'Please enter a valid, deliverable email address.',
+        ]);
+
+        $user = User::where('email', $data['email'])->first();
+
+        if ($user && ! $user->hasVerifiedEmail()) {
+            try {
+                $user->sendEmailVerificationNotification();
+            } catch (\Throwable $e) {
+                Log::error('Resend verification email failed', ['message' => $e->getMessage()]);
+                return response()->json([
+                    'message' => 'Failed to send verification email. Please try again shortly.',
+                ], 500);
+            }
+        }
+
+        return response()->json([
+            'message' => 'If an unverified account exists for that email, a new verification link has been sent.',
         ]);
     }
 
     // POST /api/forgot-password
     public function sendResetLink(Request $request)
     {
-        $request->validate([
-            'email' => 'required|email',
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
         ]);
 
-        Password::sendResetLink($request->only('email'));
+        $data = $request->validate([
+            'email' => ['required', 'string', 'email:rfc,dns', new LegitimateEmail()],
+        ], [
+            'email.email' => 'Please enter a valid, deliverable email address.',
+        ]);
+
+        $user = User::where('email', $data['email'])->first();
+
+        if ($user && $user->role === 'forager' && ! $user->hasVerifiedEmail()) {
+            return response()->json([
+                'message'               => 'Your email address is not verified yet. Please verify your email first before resetting your password.',
+                'error'                 => 'EMAIL_NOT_VERIFIED',
+                'requires_verification' => true,
+                'email'                 => $user->email,
+            ], 403);
+        }
+
+        Password::sendResetLink(['email' => $data['email']]);
 
         // Generic message — never reveal whether the email actually exists.
         return response()->json([
@@ -83,6 +192,10 @@ class AuthController extends Controller
     // POST /api/reset-password
     public function resetPassword(Request $request)
     {
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
+        ]);
+
         $request->validate([
             'token'    => 'required|string',
             'email'    => 'required|email',
@@ -112,6 +225,10 @@ class AuthController extends Controller
     // POST /api/login
     public function login(Request $request)
     {
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
+        ]);
+
         $data = $request->validate([
             'email'    => 'required|email',
             'password' => 'required|string',
@@ -123,6 +240,15 @@ class AuthController extends Controller
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
+        }
+
+        if ($user->role === 'forager' && ! $user->hasVerifiedEmail()) {
+            return response()->json([
+                'message'               => 'Please verify your email address before signing in. Check your inbox for the verification link.',
+                'error'                 => 'EMAIL_NOT_VERIFIED',
+                'requires_verification' => true,
+                'email'                 => $user->email,
+            ], 403);
         }
 
         // Revoke previous tokens (single session)
