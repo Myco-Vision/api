@@ -197,6 +197,29 @@ class ScanController extends Controller
         return response()->json($mlResult['data']);
     }
 
+    /**
+     * POST /api/scans/warmup
+     * Wakes and warms up the remote Render ML service before a user uploads a scan.
+     */
+    public function warmup()
+    {
+        $mlApiUrl = rtrim((string) config('services.ml.url'), '/');
+        if ($mlApiUrl === '') {
+            return response()->json(['warmed' => false, 'status' => 'unconfigured'], 503);
+        }
+
+        try {
+            $response = \Illuminate\Support\Facades\Http::timeout(25)->get("{$mlApiUrl}/health", ['warm' => 1]);
+            $data = $response->json();
+            return response()->json(
+                is_array($data) ? $data : ['status' => $response->successful() ? 'ok' : 'error'],
+                $response->successful() ? 200 : 503
+            );
+        } catch (\Throwable $e) {
+            return response()->json(['warmed' => false, 'status' => 'waking'], 202);
+        }
+    }
+
     // GET /api/scans/{scan}
     public function show(Request $request, Scan $scan)
     {

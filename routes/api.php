@@ -60,8 +60,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Scans (own)
     Route::get('/scans',          [ScanController::class, 'index']);
     Route::post('/scans',         [ScanController::class, 'store']);
-    Route::get('/scans/{scan}',   [ScanController::class, 'show']);
+    Route::post('/scans/warmup',  [ScanController::class, 'warmup']);
     Route::post('/scans/preview', [ScanController::class, 'preview']);
+    Route::get('/scans/{scan}',   [ScanController::class, 'show']);
     Route::patch('/scans/{scan}/location', [ScanController::class, 'updateLocation']);
     Route::delete('/scans/{scan}',[ScanController::class, 'destroy']);
 
@@ -89,6 +90,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
         Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
         Route::post('/retrain/restore',   [AdminRetrainController::class, 'restore']);
+        Route::post('/retrain/refresh',   [AdminRetrainController::class, 'refreshMl']);
 
         // Species management (read + write)
         Route::get('/species',              [SpeciesController::class, 'index']);

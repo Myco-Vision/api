@@ -552,4 +552,29 @@ class AdminRetrainController extends Controller
             ], 200);
         }
     }
+
+    /**
+     * POST /api/admin/retrain/refresh
+     * Forces the ML service to reload & warm up its Stage-1 and Stage-2 models
+     * so new scans run against the latest weights without a cold-start failure.
+     */
+    public function refreshMl()
+    {
+        try {
+            $response = Http::timeout(45)
+                ->withHeaders(['X-Retrain-Key' => $this->retrainKey()])
+                ->post($this->mlUrl() . '/refresh');
+
+            $body = $response->json();
+            return response()->json(
+                is_array($body) ? $body : ['message' => 'ML refresh completed.'],
+                $response->status()
+            );
+        } catch (\Throwable $e) {
+            Log::error('ML refresh failed', ['msg' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Could not reach ML service to refresh models. It may still be waking up on Render.',
+            ], 503);
+        }
+    }
 }
