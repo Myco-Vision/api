@@ -403,38 +403,91 @@ class AuthController extends Controller
 
         $user = $request->user();
         $file = $request->file('avatar');
-
-        $src = @imagecreatefromstring((string) file_get_contents($file->getRealPath()));
-        if ($src === false) {
-            throw ValidationException::withMessages(['avatar' => ['The image could not be processed.']]);
+        $realPath = $file->getRealPath();
+        $raw = $realPath !== false ? @file_get_contents($realPath) : false;
+        if (! is_string($raw) || $raw === '') {
+            throw ValidationException::withMessages(['avatar' => ['The uploaded image could not be read.']]);
         }
 
-        // Center-crop to a square, then resize to 256x256 (re-encoding also strips metadata)
-        $size = 256;
-        $w = imagesx($src);
-        $h = imagesy($src);
-        $side = min($w, $h);
-        $dst = imagecreatetruecolor($size, $size);
-        imagefill($dst, 0, 0, imagecolorallocate($dst, 255, 255, 255)); // flatten transparency
-        imagecopyresampled($dst, $src, 0, 0, intdiv($w - $side, 2), intdiv($h - $side, 2), $size, $size, $side, $side);
+        // Re-encode and crop server-side when GD is available; otherwise verify and store uploaded bytes directly
+        if (function_exists('imagecreatefromstring')) {
+            $src = @imagecreatefromstring($raw);
+            if ($src === false) {
+                throw ValidationException::withMessages(['avatar' => ['The image could not be processed.']]);
+            }
 
-        ob_start();
-        imagejpeg($dst, null, 85);
-        $jpeg = ob_get_clean();
-        imagedestroy($src);
-        imagedestroy($dst);
+            // Center-crop to a square, then resize to 256x256 (re-encoding also strips metadata)
+            $size = 256;
+            $w = imagesx($src);
+            $h = imagesy($src);
+            $side = min($w, $h);
+            $dst = imagecreatetruecolor($size, $size);
+            imagefill($dst, 0, 0, imagecolorallocate($dst, 255, 255, 255)); // flatten transparency
+            imagecopyresampled($dst, $src, 0, 0, intdiv($w - $side, 2), intdiv($h - $side, 2), $size, $size, $side, $side);
 
-        $path = 'avatars/' . $user->id . '_' . Str::random(16) . '.jpg';
+            ob_start();
+            imagejpeg($dst, null, 85);
+            $contents = (string) ob_get_clean();
+            imagedestroy($src);
+            imagedestroy($dst);
+            $ext = 'jpg';
+        } else {
+            $info = @getimagesizefromstring($raw);
+            $extMap = [
+                IMAGETYPE_JPEG => 'jpg',
+                IMAGETYPE_PNG  => 'png',
+                IMAGETYPE_WEBP => 'webp',
+            ];
+            if ($info === false || ! isset($extMap[$info[2]])) {
+                throw ValidationException::withMessages(['avatar' => ['The image could not be processed.']]);
+            }
+            $contents = $raw;
+            $ext = $extMap[$info[2]];
+        }
+
+        $path = 'avatars/' . $user->id . '_' . Str::random(16) . '.' . $ext;
         $disk = Storage::disk('public');
-        $disk->put($path, $jpeg);
 
-        // Remove the previous avatar if it was a locally stored file (not a Google URL)
-        $old = $user->profile_photo;
-        if ($old && ! preg_match('#^https?://#i', $old)) {
-            $disk->delete($old);
+        try {
+            $stored = $disk->put($path, $contents);
+        } catch (\Throwable $e) {
+            Log::error('Avatar upload failed', [
+                'user_id' => $user->id,
+                'path'    => $path,
+                'error'   => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to save profile photo to storage.',
+            ], 500);
         }
 
+        if (! $stored) {
+            Log::error('Avatar upload returned false', [
+                'user_id' => $user->id,
+                'path'    => $path,
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to save profile photo to storage.',
+            ], 500);
+        }
+
+        $old = $user->profile_photo;
         $user->update(['profile_photo' => $path]);
+
+        // Best-effort cleanup of the previous avatar if it was stored on our disk (not a Google URL)
+        if ($old && ! preg_match('#^https?://#i', $old)) {
+            try {
+                $disk->delete($old);
+            } catch (\Throwable $e) {
+                Log::warning('Old avatar cleanup failed', [
+                    'user_id' => $user->id,
+                    'old'     => $old,
+                    'error'   => $e->getMessage(),
+                ]);
+            }
+        }
 
         return response()->json([
             'message' => 'Profile photo updated successfully.',
