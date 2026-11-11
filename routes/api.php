@@ -121,8 +121,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/accounts',                       [AccountManagementController::class, 'store']);
         Route::get('/accounts/{user}',                 [AccountManagementController::class, 'show']);
         Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
-        Route::delete('/accounts/{user}',              [AccountManagementController::class, 'destroy']);
-        Route::post('/accounts/{user}/reset-password', [AccountManagementController::class, 'resetPassword']);
+        Route::delete('/accounts/{user}',                      [AccountManagementController::class, 'destroy']);
+        Route::post('/accounts/{user}/reset-password',         [AccountManagementController::class, 'resetPassword']);
+        Route::post('/accounts/{user}/resend-verification',    [AccountManagementController::class, 'resendVerification']);
 
         // Approving a refund issues real money through PayMongo
         Route::post('/refunds/{refund}/approve',       [RefundController::class, 'approve']);

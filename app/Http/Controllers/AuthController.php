@@ -172,7 +172,7 @@ class AuthController extends Controller
 
         $user = User::where('email', $data['email'])->first();
 
-        if ($user && $user->role === 'forager' && ! $user->hasVerifiedEmail()) {
+        if ($user && $this->requiresEmailVerification($user)) {
             return response()->json([
                 'message'               => 'Your email address is not verified yet. Please verify your email first before resetting your password.',
                 'error'                 => 'EMAIL_NOT_VERIFIED',
@@ -242,7 +242,7 @@ class AuthController extends Controller
             ]);
         }
 
-        if ($user->role === 'forager' && ! $user->hasVerifiedEmail()) {
+        if ($this->requiresEmailVerification($user)) {
             return response()->json([
                 'message'               => 'Please verify your email address before signing in. Check your inbox for the verification link.',
                 'error'                 => 'EMAIL_NOT_VERIFIED',
@@ -503,5 +503,22 @@ class AuthController extends Controller
         }
 
         return response()->json(['message' => 'Your account has been deleted.']);
+    }
+
+    private function requiresEmailVerification(User $user): bool
+    {
+        if ($user->hasVerifiedEmail()) {
+            return false;
+        }
+
+        // Exempt seeded bootstrap admin accounts so they cannot be locked out.
+        if (
+            $user->role !== 'forager'
+            && in_array(strtolower((string) $user->email), ['superadmin@mycovision.com', 'admin@mycovision.com', 'admin@mycovision.app'], true)
+        ) {
+            return false;
+        }
+
+        return true;
     }
 }
