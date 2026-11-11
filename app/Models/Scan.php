@@ -44,7 +44,7 @@ class Scan extends Model
         }
 
         // Direct Supabase storage URL when available
-        $supabaseUrl = env('AWS_URL');
+        $supabaseUrl = config('filesystems.disks.public.url') ?: env('AWS_URL');
         if ($supabaseUrl && config('filesystems.disks.public.driver') === 's3') {
             return rtrim($supabaseUrl, '/') . '/' . ltrim($this->image_path, '/');
         }

@@ -88,6 +88,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/retrain/candidates', [AdminRetrainController::class, 'candidates']);
         Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
         Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
+        Route::post('/retrain/restore',   [AdminRetrainController::class, 'restore']);
 
         // Species management (read + write)
         Route::get('/species',              [SpeciesController::class, 'index']);
