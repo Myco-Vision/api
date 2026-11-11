@@ -21,6 +21,90 @@ class ScanController extends Controller
         return response()->json($scans);
     }
 
+    /**
+     * Send an uploaded image to the Flask ML /classify endpoint, retrying once
+     * on transient 502/503/504 responses (e.g. cold starts or deploys on Render).
+     */
+    private function classifyWithMlService(\Illuminate\Http\UploadedFile $file, int $timeoutSeconds = 90): array
+    {
+        $mlApiUrl = rtrim((string) config('services.ml.url'), '/');
+        if ($mlApiUrl === '') {
+            return [
+                'ok'      => false,
+                'status'  => 503,
+                'message' => 'The mushroom classification service URL is not configured.',
+            ];
+        }
+
+        $filename = $file->getClientOriginalName() ?: '';
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        if (! in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+            $guessed = strtolower((string) ($file->guessExtension() ?: 'jpg'));
+            if (! in_array($guessed, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+                $guessed = 'jpg';
+            }
+            $filename = 'upload.' . $guessed;
+        }
+
+        $bytes = file_get_contents($file->path());
+        $response = null;
+
+        for ($attempt = 1; $attempt <= 2; $attempt++) {
+            try {
+                $response = \Illuminate\Support\Facades\Http::timeout($timeoutSeconds)
+                    ->attach('image', $bytes, $filename)
+                    ->post("{$mlApiUrl}/classify");
+
+                if ($response->successful()) {
+                    return ['ok' => true, 'data' => $response->json()];
+                }
+
+                if ($attempt === 1 && in_array($response->status(), [502, 503, 504], true)) {
+                    usleep(1500000);
+                    continue;
+                }
+
+                Log::error('ML API Error response', [
+                    'status' => $response->status(),
+                    'body'   => $response->body(),
+                ]);
+
+                if ($response->status() === 422) {
+                    return [
+                        'ok'      => false,
+                        'status'  => 422,
+                        'message' => $response->json('message') ?? 'Invalid image file. Use JPG, PNG, or WebP.',
+                    ];
+                }
+
+                return [
+                    'ok'      => false,
+                    'status'  => 502,
+                    'message' => in_array($response->status(), [502, 503, 504], true)
+                        ? 'The mushroom classification service is waking up or restarting. Please try again in a few seconds.'
+                        : 'Image classification failed. Please try again.',
+                ];
+            } catch (\Exception $e) {
+                if ($attempt === 1) {
+                    usleep(1500000);
+                    continue;
+                }
+                Log::error('ML API Exception', ['message' => $e->getMessage()]);
+                return [
+                    'ok'      => false,
+                    'status'  => 503,
+                    'message' => 'The mushroom classification service is currently offline or restarting. Please try again shortly.',
+                ];
+            }
+        }
+
+        return [
+            'ok'      => false,
+            'status'  => 502,
+            'message' => 'Image classification failed. Please try again.',
+        ];
+    }
+
     // POST /api/scans
     public function store(Request $request)
     {
@@ -46,37 +130,15 @@ class ScanController extends Controller
         }
 
         $file = $request->file('image');
-        $mlApiUrl = env('ML_API_URL', 'http://127.0.0.1:5000');
-
         set_time_limit(120); // Give extra time for ML inference on CPU
-        $mlApiUrl = rtrim(config('services.ml.url'), '/');
         $speciesRecord = null;
 
         // 1. Run ML inference first using the uploaded temp file (not yet written to public storage)
-        try {
-            $response = \Illuminate\Support\Facades\Http::timeout(90)->attach(
-                'image', file_get_contents($file->path()), $file->getClientOriginalName()
-            )->post("{$mlApiUrl}/classify");
-
-            if (!$response->successful()) {
-                Log::error('ML API Error response', [
-                    'status' => $response->status(),
-                    'body'   => $response->body()
-                ]);
-                return response()->json([
-                    'message' => 'Image classification failed. Please try again.'
-                ], 502);
-            }
-
-            $mlData = $response->json();
-        } catch (\Exception $e) {
-            Log::error('ML API Exception', [
-                'message' => $e->getMessage()
-            ]);
-            return response()->json([
-                'message' => 'The mushroom classification service is currently offline. Please try again shortly.'
-            ], 503);
+        $mlResult = $this->classifyWithMlService($file, 90);
+        if (! $mlResult['ok']) {
+            return response()->json(['message' => $mlResult['message']], $mlResult['status']);
         }
+        $mlData = $mlResult['data'];
 
         // 2. Reject non-mushrooms before touching disk or database
         $resultClass = $mlData['result_classification'] ?? 'unknown';
@@ -127,30 +189,12 @@ class ScanController extends Controller
             'image' => 'required|image|max:10240',
         ]);
 
-        $mlApiUrl = rtrim(config('services.ml.url'), '/');
-
-        try {
-            $file = $request->file('image');
-
-            $response = \Illuminate\Support\Facades\Http::timeout(30)->attach(
-                'image',
-                file_get_contents($file->path()),
-                $file->getClientOriginalName()
-            )->post("{$mlApiUrl}/classify");
-
-            if (! $response->successful()) {
-                Log::error('ML preview error', [
-                    'status' => $response->status(),
-                    'body'   => $response->body(),
-                ]);
-                return response()->json(['message' => 'Classification failed.'], 502);
-            }
-
-            return response()->json($response->json());
-        } catch (\Exception $e) {
-            Log::error('ML preview exception', ['message' => $e->getMessage()]);
-            return response()->json(['message' => 'ML service offline.'], 503);
+        $mlResult = $this->classifyWithMlService($request->file('image'), 30);
+        if (! $mlResult['ok']) {
+            return response()->json(['message' => $mlResult['message']], $mlResult['status']);
         }
+
+        return response()->json($mlResult['data']);
     }
 
     // GET /api/scans/{scan}
