@@ -346,7 +346,7 @@ class AdminController extends Controller
                         : "{$retrainCandidates} consented images queued (20 recommended)",
                     'count'    => $retrainCandidates,
                     'tone'     => 'emerald',
-                    'route'    => '/admin/retrain',
+                    'route'    => '/admin/species?tab=retrain',
                 ];
             }
 
@@ -363,7 +363,7 @@ class AdminController extends Controller
                         : "{$unlinkedSpecies} consented scans ready for species catalog review",
                     'count'    => $unlinkedSpecies,
                     'tone'     => 'blue',
-                    'route'    => '/admin/species',
+                    'route'    => '/admin/species?tab=candidates',
                 ];
             }
         }
