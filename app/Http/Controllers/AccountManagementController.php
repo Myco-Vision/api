@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Log;
 class AccountManagementController extends Controller
 {
     // Same Philippine mobile format enforced at self-registration (0917 123 4567 / +63 917 123 4567)
-    private const PH_MOBILE_REGEX = '/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/';
+    private const PH_MOBILE_REGEX = 'regex:/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/';
     private const PH_MOBILE_MESSAGE = 'Please enter a valid Philippine mobile number (e.g. 0917 123 4567 or +63 917 123 4567).';
 
     public function index(Request $request)
