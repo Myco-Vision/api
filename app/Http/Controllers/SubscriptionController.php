@@ -7,17 +7,21 @@ use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
 use App\Models\User;
 use App\Services\PayMongoService;
+use App\Services\TransactionEmailService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class SubscriptionController extends Controller
 {
     protected PayMongoService $payMongoService;
+    protected TransactionEmailService $transactionEmails;
 
-    public function __construct(PayMongoService $payMongoService)
+    public function __construct(PayMongoService $payMongoService, TransactionEmailService $transactionEmails)
     {
         $this->payMongoService = $payMongoService;
+        $this->transactionEmails = $transactionEmails;
     }
 
     /**
@@ -64,24 +68,13 @@ class SubscriptionController extends Controller
             try {
                 $sessionData = $this->payMongoService->getCheckoutSession($pending->paymongo_session_id);
                 if ($sessionData['paid'] ?? false) {
-                    $planKey = $pending->plan ?? 'monthly';
-                    $startsAt = Carbon::now();
-                    $expiresAt = $planKey === 'annual' ? Carbon::now()->addYear() : Carbon::now()->addMonth();
-
-                    $pending->update([
-                        'status'              => 'active',
-                        'price'               => ($sessionData['amount'] ?? 0) > 0 ? $sessionData['amount'] : $pending->price,
-                        'currency'            => $sessionData['currency'] ?? 'PHP',
-                        'paymongo_payment_id' => $sessionData['payment_id'] ?? null,
-                        'payment_method'      => $sessionData['payment_method'] ?? $pending->payment_method,
-                        'starts_at'           => $startsAt,
-                        'expires_at'          => $expiresAt,
-                        'metadata'            => array_merge($pending->metadata ?? [], [
-                            'verified_at' => Carbon::now()->toIso8601String(),
-                            'auto_synced' => true,
-                            'session'     => $sessionData,
-                        ]),
-                    ]);
+                    [$activated, $justActivated] = $this->activatePaidSubscription($pending, $user->id, array_merge($sessionData, [
+                        'session_id' => $pending->paymongo_session_id,
+                        'source'     => 'status_auto_sync',
+                    ]));
+                    if ($justActivated) {
+                        $this->transactionEmails->sendPaymentReceipt($activated);
+                    }
                 }
             } catch (\Throwable $e) {
                 Log::warning("Auto-sync pending subscription {$pending->paymongo_session_id} skipped: " . $e->getMessage());
@@ -250,45 +243,14 @@ class SubscriptionController extends Controller
                 ->where('user_id', $user->id)
                 ->first();
 
-            $planKey = $data['plan'] ?? ($subscription?->plan ?? 'monthly');
-            $planDetails = $this->payMongoService->getPlan($planKey) ?? $this->payMongoService->getPlan('monthly');
+            [$subscription, $justActivated] = $this->activatePaidSubscription($subscription, $user->id, array_merge($sessionData, [
+                'session_id' => $sessionId,
+                'plan'       => $data['plan'] ?? null,
+                'source'     => 'verify',
+            ]));
 
-            $durationMonths = $planKey === 'annual' ? 12 : 1;
-            $startsAt = Carbon::now();
-            $expiresAt = $planKey === 'annual' ? Carbon::now()->addYear() : Carbon::now()->addMonth();
-
-            if ($subscription) {
-                $subscription->update([
-                    'plan'                   => $planKey,
-                    'status'                 => 'active',
-                    'price'                  => $sessionData['amount'] > 0 ? $sessionData['amount'] : $planDetails['amount'],
-                    'currency'               => $sessionData['currency'] ?? 'PHP',
-                    'paymongo_payment_id'    => $sessionData['payment_id'] ?? null,
-                    'payment_method'         => $sessionData['payment_method'] ?? 'paymongo',
-                    'starts_at'              => $startsAt,
-                    'expires_at'             => $expiresAt,
-                    'metadata'               => array_merge($subscription->metadata ?? [], [
-                        'verified_at' => Carbon::now()->toIso8601String(),
-                        'session'     => $sessionData,
-                    ]),
-                ]);
-            } else {
-                $subscription = Subscription::create([
-                    'user_id'                => $user->id,
-                    'plan'                   => $planKey,
-                    'status'                 => 'active',
-                    'price'                  => $sessionData['amount'] > 0 ? $sessionData['amount'] : $planDetails['amount'],
-                    'currency'               => $sessionData['currency'] ?? 'PHP',
-                    'paymongo_session_id'    => $sessionId,
-                    'paymongo_payment_id'    => $sessionData['payment_id'] ?? null,
-                    'payment_method'         => $sessionData['payment_method'] ?? 'paymongo',
-                    'starts_at'              => $startsAt,
-                    'expires_at'             => $expiresAt,
-                    'metadata'               => [
-                        'verified_at' => Carbon::now()->toIso8601String(),
-                        'session'     => $sessionData,
-                    ],
-                ]);
+            if ($justActivated) {
+                $this->transactionEmails->sendPaymentReceipt($subscription);
             }
 
             return response()->json([
@@ -350,27 +312,33 @@ class SubscriptionController extends Controller
         Log::info('PayMongo Webhook event received: ' . $event, ['payload' => $payload]);
 
         if ($event === 'checkout_session.payment.paid') {
-            $checkoutSession = $payload['data']['attributes']['data'] ?? [];
-            $sessionId = $checkoutSession['id'] ?? null;
-            $payments = $checkoutSession['attributes']['payments'] ?? [];
+            try {
+                $checkoutSession = $payload['data']['attributes']['data'] ?? [];
+                $sessionId = $checkoutSession['id'] ?? null;
+                $payments = $checkoutSession['attributes']['payments'] ?? [];
+                $primaryPayment = $payments[0]['attributes'] ?? [];
 
-            if ($sessionId) {
-                $sub = Subscription::where('paymongo_session_id', $sessionId)->first();
+                if ($sessionId) {
+                    $sub = Subscription::where('paymongo_session_id', $sessionId)->first();
 
-                // Idempotent: PayMongo retries deliveries, so never re-activate an active subscription
-                if ($sub && $sub->status !== 'active') {
-                    $planKey = $sub->plan;
-                    $startsAt = Carbon::now();
-                    $expiresAt = $planKey === 'annual' ? Carbon::now()->addYear() : Carbon::now()->addMonth();
+                    // Idempotent: PayMongo retries deliveries, so never re-activate an active subscription
+                    if ($sub && $sub->status !== 'active') {
+                        [$activated, $justActivated] = $this->activatePaidSubscription($sub, $sub->user_id, [
+                            'session_id'     => $sessionId,
+                            'payment_id'     => $payments[0]['id'] ?? null,
+                            'payment_method' => $primaryPayment['source']['type'] ?? ($primaryPayment['payment_method_type'] ?? 'gcash'),
+                            'amount'         => isset($primaryPayment['amount']) ? ($primaryPayment['amount'] / 100) : 0,
+                            'currency'       => $primaryPayment['currency'] ?? 'PHP',
+                            'source'         => 'webhook',
+                        ]);
 
-                    $sub->update([
-                        'status'              => 'active',
-                        'paymongo_payment_id' => $payments[0]['id'] ?? null,
-                        'payment_method'      => $payments[0]['attributes']['source']['type'] ?? 'gcash',
-                        'starts_at'           => $startsAt,
-                        'expires_at'          => $expiresAt,
-                    ]);
+                        if ($justActivated) {
+                            $this->transactionEmails->sendPaymentReceipt($activated);
+                        }
+                    }
                 }
+            } catch (\Throwable $e) {
+                Log::error('Payment webhook handling failed: ' . $e->getMessage());
             }
         }
 
@@ -442,6 +410,7 @@ class SubscriptionController extends Controller
             SubscriptionEvent::log($refund->user_id, 'refund_failed', $refund->subscription_id, $refund->reviewed_by, [
                 'refund_request_id' => $refund->id,
             ]);
+            $this->transactionEmails->sendRefundFailed($refund->fresh(), 'PayMongo reported the refund as failed.');
             return;
         }
 
@@ -451,6 +420,90 @@ class SubscriptionController extends Controller
             }
             RefundController::finalize($refund->fresh());
         }
+    }
+
+    /**
+     * Atomically mark a paid PayMongo checkout subscription as active once.
+     * Returns [$subscription, $justActivated] so payment receipts are sent exactly once.
+     *
+     * @return array{0: Subscription, 1: bool}
+     */
+    private function activatePaidSubscription(?Subscription $existing, ?int $userId, array $paymentData): array
+    {
+        return DB::transaction(function () use ($existing, $userId, $paymentData) {
+            $sessionId = $paymentData['session_id'] ?? $existing?->paymongo_session_id;
+
+            $locked = null;
+            if ($existing) {
+                $locked = Subscription::whereKey($existing->id)->lockForUpdate()->first();
+            } elseif ($sessionId) {
+                $locked = Subscription::where('paymongo_session_id', $sessionId)
+                    ->when($userId, fn ($q) => $q->where('user_id', $userId))
+                    ->lockForUpdate()
+                    ->first();
+            }
+
+            if ($locked && $locked->status === 'active') {
+                return [$locked, false];
+            }
+
+            $planKey = $paymentData['plan'] ?? ($locked?->plan ?? 'monthly');
+            $planDetails = $this->payMongoService->getPlan($planKey) ?? $this->payMongoService->getPlan('monthly');
+
+            $resolvedAmount = (float) ($paymentData['amount'] ?? 0);
+            if (($paymentData['mode'] ?? '') === 'sandbox_simulator' && $locked && $locked->price > 0) {
+                $resolvedAmount = (float) $locked->price;
+            } elseif ($resolvedAmount <= 0) {
+                $resolvedAmount = ($locked && $locked->price > 0)
+                    ? (float) $locked->price
+                    : (float) $planDetails['amount'];
+            }
+
+            $startsAt = Carbon::now();
+            $expiresAt = $planKey === 'annual' ? $startsAt->copy()->addYear() : $startsAt->copy()->addMonth();
+
+            $metadata = $locked?->metadata ?? [];
+            $metadata['verified_at'] = Carbon::now()->toIso8601String();
+            if (($paymentData['source'] ?? null) === 'status_auto_sync') {
+                $metadata['auto_synced'] = true;
+            }
+            if (($paymentData['source'] ?? null) !== 'webhook') {
+                $metadata['session'] = $paymentData;
+            }
+
+            $attributes = [
+                'plan'                => $planKey,
+                'status'              => 'active',
+                'payment_status'      => 'paid',
+                'price'               => $resolvedAmount,
+                'currency'            => $paymentData['currency'] ?? ($locked?->currency ?? 'PHP'),
+                'paymongo_payment_id' => $paymentData['payment_id'] ?? $locked?->paymongo_payment_id,
+                'payment_method'      => $paymentData['payment_method'] ?? ($locked?->payment_method ?? 'paymongo'),
+                'starts_at'           => $startsAt,
+                'expires_at'          => $expiresAt,
+                'metadata'            => $metadata,
+            ];
+
+            if ($locked) {
+                $locked->update($attributes);
+                $sub = $locked->fresh();
+            } else {
+                $sub = Subscription::create(array_merge($attributes, [
+                    'user_id'             => $userId,
+                    'paymongo_session_id' => $sessionId,
+                ]));
+            }
+
+            SubscriptionEvent::log($sub->user_id, 'activated', $sub->id, null, [
+                'plan'           => $sub->plan,
+                'amount'         => $sub->price,
+                'payment_id'     => $sub->paymongo_payment_id,
+                'payment_method' => $sub->payment_method,
+                'source'         => $paymentData['source'] ?? 'verify',
+            ]);
+
+            return [$sub, true];
+        });
     }
 
     /**
