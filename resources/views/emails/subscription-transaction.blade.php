@@ -82,6 +82,46 @@
                                 </table>
                             @endif
 
+                            @if (!empty($tx['criteria_summary']) || !empty($tx['criteria_items']))
+                                <div style="margin:0 0 20px 0; padding:14px 16px; background-color:#fafaf9; border:1px solid #e7e5e4; border-radius:10px;">
+                                    <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:#1c1917; margin-bottom:6px;">
+                                        {{ $tx['criteria_title'] ?? 'Eligibility & Decision Criteria' }}
+                                    </div>
+                                    @if (!empty($tx['criteria_summary']))
+                                        <p style="margin:0 0 10px 0; font-size:13px; line-height:1.55; color:#44403c;">
+                                            {{ $tx['criteria_summary'] }}
+                                        </p>
+                                    @endif
+                                    @if (!empty($tx['criteria_items']))
+                                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                                            @foreach ($tx['criteria_items'] as $item)
+                                                @php
+                                                    $itemStatus = $item['status'] ?? 'info';
+                                                    $icon = match ($itemStatus) {
+                                                        'pass' => '✓',
+                                                        'fail' => '✕',
+                                                        default => '•',
+                                                    };
+                                                    $iconColor = match ($itemStatus) {
+                                                        'pass' => '#15803d',
+                                                        'fail' => '#b91c1c',
+                                                        default => '#57534e',
+                                                    };
+                                                @endphp
+                                                <tr>
+                                                    <td style="padding:4px 8px 4px 0; font-size:13px; font-weight:700; color:{{ $iconColor }}; width:18px; vertical-align:top;">
+                                                        {{ $icon }}
+                                                    </td>
+                                                    <td style="padding:4px 0; font-size:13px; line-height:1.45; color:#44403c; vertical-align:top;">
+                                                        <strong style="color:#1c1917;">{{ $item['label'] }}:</strong> {{ $item['detail'] }}
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+                                        </table>
+                                    @endif
+                                </div>
+                            @endif
+
                             @if (!empty($tx['note']))
                                 <div style="margin:0 0 22px 0; padding:12px 14px; background-color:#fafaf9; border-left:3px solid #10b981; border-radius:4px; font-size:13px; line-height:1.55; color:#44403c;">
                                     {{ $tx['note'] }}

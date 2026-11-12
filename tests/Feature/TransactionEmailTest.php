@@ -552,6 +552,101 @@ class TransactionEmailTest extends TestCase
         }
     }
 
+    public function test_outcome_emails_include_criteria_explaining_approval_or_rejection(): void
+    {
+        Mail::fake();
+        $user = $this->createUser('criteria@gmail.com');
+        $admin = $this->createUser('admin_criteria@gmail.com', 'super_admin');
+
+        $sub = Subscription::create([
+            'user_id'             => $user->id,
+            'plan'                => 'monthly',
+            'status'              => 'active',
+            'price'               => 149.00,
+            'currency'            => 'PHP',
+            'paymongo_payment_id' => 'pay_crit_1',
+            'payment_method'      => 'gcash',
+            'payment_status'      => 'paid',
+            'starts_at'           => now()->subDay(),
+            'expires_at'          => now()->addDays(29),
+        ]);
+
+        // 1. Successful 7-day guarantee refund renders passing criteria
+        $approvedRefund = RefundRequest::create([
+            'user_id'            => $user->id,
+            'subscription_id'    => $sub->id,
+            'reviewed_by'        => $admin->id,
+            'reviewed_at'        => now(),
+            'reason_type'        => 'first_time_guarantee',
+            'reason'             => 'Did not use many scans within guarantee period.',
+            'requested_amount'   => 149.00,
+            'approved_amount'    => 149.00,
+            'refund_type'        => 'full',
+            'status'             => 'refunded',
+            'paymongo_refund_id' => 'ref_crit_ok',
+            'refunded_at'        => now(),
+            'eligibility'        => [
+                'paid'                 => true,
+                'days_since_purchase'  => 1,
+                'premium_scans_used'   => 2,
+                'scan_cap'             => 20,
+                'is_first_purchase'    => true,
+                'prior_guarantee_used' => false,
+                'guarantee_eligible'   => true,
+                'notes'                => [],
+            ],
+        ]);
+
+        // 2. Rejected request outside 7-day guarantee & scan cap renders unmet criteria + reviewer note
+        $rejectedRefund = RefundRequest::create([
+            'user_id'          => $user->id,
+            'subscription_id'  => $sub->id,
+            'reviewed_by'      => $admin->id,
+            'reviewed_at'      => now(),
+            'reason_type'      => 'first_time_guarantee',
+            'reason'           => 'Requesting refund after heavy usage.',
+            'requested_amount' => 149.00,
+            'refund_type'      => 'full',
+            'status'           => 'rejected',
+            'admin_note'       => 'Guarantee window and scan limit were exceeded.',
+            'eligibility'      => [
+                'paid'                 => true,
+                'days_since_purchase'  => 12,
+                'premium_scans_used'   => 25,
+                'scan_cap'             => 20,
+                'is_first_purchase'    => true,
+                'prior_guarantee_used' => false,
+                'guarantee_eligible'   => false,
+                'notes'                => [
+                    'The 7-day guarantee window has passed.',
+                    'More than 20 premium scans were used.',
+                ],
+            ],
+        ]);
+
+        $svc = app(TransactionEmailService::class);
+        $svc->sendRefundCompleted($approvedRefund);
+        $svc->sendRefundRejected($rejectedRefund);
+
+        $sent = Mail::sent(SubscriptionTransactionMail::class);
+        $this->assertCount(2, $sent);
+
+        $okHtml = $sent[0]->render();
+        $okText = view('emails.subscription-transaction-text', ['tx' => $sent[0]->transaction])->render();
+        $this->assertStringContainsString('Refund Approval &amp; Settlement Criteria', $okHtml);
+        $this->assertStringContainsString('7-Day Guarantee Window', $okHtml);
+        $this->assertStringContainsString('[PASS] 7-Day Guarantee Window: 1 day(s) since purchase', $okText);
+        $this->assertStringContainsString('[PASS] Gateway Settlement: Completed via PayMongo', $okText);
+
+        $rejHtml = $sent[1]->render();
+        $rejText = view('emails.subscription-transaction-text', ['tx' => $sent[1]->transaction])->render();
+        $this->assertStringContainsString('Refund Rejection Criteria &amp; Review', $rejHtml);
+        $this->assertStringContainsString('Guarantee window and scan limit were exceeded.', $rejHtml);
+        $this->assertStringContainsString('[UNMET] Review Decision: Rejected — Guarantee window and scan limit were exceeded.', $rejText);
+        $this->assertStringContainsString('[UNMET] 7-Day Guarantee Window: 12 day(s) since purchase (exceeds the 7-day limit).', $rejText);
+        $this->assertStringContainsString('[UNMET] Premium Scan Usage: 25 scans used (exceeds the 20-scan limit).', $rejText);
+    }
+
     private function createUser(string $email, string $role = 'forager'): User
     {
         return User::create([

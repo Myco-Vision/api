@@ -190,6 +190,7 @@ class TransactionEmailService
 
         $amount = (float) ($refund->approved_amount ?? $refund->requested_amount ?? 0);
         $amountText = $this->formatCurrency($amount, $this->currencyFor($refund));
+        $criteria = $this->buildRefundOutcomeCriteria($refund, 'completed', $amountText);
 
         $details = $this->baseRefundDetails($refund, 'Refund Successful');
         $details[] = ['label' => 'Refunded Amount', 'value' => $amountText];
@@ -197,23 +198,26 @@ class TransactionEmailService
 
         $note = 'Depending on your payment provider (e.g. GCash), it may take a short time to reflect on your statement. Per our Refund Policy, Premium access for this subscription has ended.';
         if (!empty($refund->admin_note)) {
-            $note .= ' Note: ' . $refund->admin_note;
+            $note .= ' Reviewer note: ' . $refund->admin_note;
         }
 
         $payload = [
-            'subject'        => "MycoVision Refund Successful (#{$refund->id} — {$amountText})",
-            'badge'          => 'REFUND SUCCESSFUL',
-            'badge_tone'     => 'success',
-            'heading'        => 'Your Refund Was Successful',
-            'recipient_name' => $name,
-            'intro'          => "Your refund of {$amountText} for MycoVision {$this->formatPlanName($refund->subscription?->plan)} was successful and has been issued to your payment method.",
-            'amount_label'   => 'Amount Refunded',
-            'amount_display' => $amountText,
-            'details'        => $details,
-            'note'           => $note,
-            'cta_label'      => 'View Subscription History',
-            'cta_url'        => $this->frontendUrl('/users/subscription'),
-            'support_email'  => RefundPolicyService::SUPPORT_EMAIL,
+            'subject'          => "MycoVision Refund Successful (#{$refund->id} — {$amountText})",
+            'badge'            => 'REFUND SUCCESSFUL',
+            'badge_tone'       => 'success',
+            'heading'          => 'Your Refund Was Successful',
+            'recipient_name'   => $name,
+            'intro'            => "Your refund of {$amountText} for MycoVision {$this->formatPlanName($refund->subscription?->plan)} was successful and has been issued to your payment method.",
+            'amount_label'     => 'Amount Refunded',
+            'amount_display'   => $amountText,
+            'details'          => $details,
+            'criteria_title'   => $criteria['title'],
+            'criteria_summary' => $criteria['summary'],
+            'criteria_items'   => $criteria['items'],
+            'note'             => $note,
+            'cta_label'        => 'View Subscription History',
+            'cta_url'          => $this->frontendUrl('/users/subscription'),
+            'support_email'    => RefundPolicyService::SUPPORT_EMAIL,
         ];
 
         return $this->deliver($email, $payload, 'Refund completed receipt email failed', [
@@ -234,19 +238,23 @@ class TransactionEmailService
 
         $details = $this->baseRefundDetails($refund, 'Rejected');
         $details[] = ['label' => 'Reviewed At', 'value' => $this->formatTimestamp($refund->reviewed_at ?? now())];
+        $criteria = $this->buildRefundOutcomeCriteria($refund, 'rejected');
 
         $payload = [
-            'subject'        => "MycoVision Refund Request Rejected (#{$refund->id})",
-            'badge'          => 'REFUND REJECTED',
-            'badge_tone'     => 'danger',
-            'heading'        => 'Your Refund Request Was Rejected',
-            'recipient_name' => $name,
-            'intro'          => "After reviewing refund request #{$refund->id}, your refund request was rejected.",
-            'details'        => $details,
-            'note'           => $refund->admin_note ? 'Reviewer note: ' . $refund->admin_note : null,
-            'cta_label'      => 'View Refund Policy',
-            'cta_url'        => $this->frontendUrl('/refund-policy'),
-            'support_email'  => RefundPolicyService::SUPPORT_EMAIL,
+            'subject'          => "MycoVision Refund Request Rejected (#{$refund->id})",
+            'badge'            => 'REFUND REJECTED',
+            'badge_tone'       => 'danger',
+            'heading'          => 'Your Refund Request Was Rejected',
+            'recipient_name'   => $name,
+            'intro'            => "After reviewing refund request #{$refund->id}, your refund request was rejected.",
+            'details'          => $details,
+            'criteria_title'   => $criteria['title'],
+            'criteria_summary' => $criteria['summary'],
+            'criteria_items'   => $criteria['items'],
+            'note'             => 'Your subscription remains unchanged. Review our Refund Policy for full eligibility terms, or contact support if you have additional billing documentation.',
+            'cta_label'        => 'View Refund Policy',
+            'cta_url'          => $this->frontendUrl('/refund-policy'),
+            'support_email'    => RefundPolicyService::SUPPORT_EMAIL,
         ];
 
         return $this->deliver($email, $payload, 'Refund rejected email failed', [
@@ -527,6 +535,200 @@ class TransactionEmailService
         }
 
         return $base . $path;
+    }
+
+    /**
+     * Build the transparent eligibility / decision criteria breakdown explaining why a refund succeeded or was rejected.
+     *
+     * @return array{title: string, summary: string, items: array<int, array{status: string, label: string, detail: string}>}
+     */
+    private function buildRefundOutcomeCriteria(RefundRequest $refund, string $outcome, string $amountText = ''): array
+    {
+        $eval = is_array($refund->eligibility) ? $refund->eligibility : [];
+        $adminNote = trim((string) ($refund->admin_note ?? ''));
+        $policyNotes = array_values(array_filter(
+            is_array($eval['notes'] ?? null) ? $eval['notes'] : [],
+            static fn ($note) => is_string($note) && trim($note) !== ''
+        ));
+
+        $checks = $this->evaluateRefundPolicyChecks($refund, $eval, $outcome);
+
+        if ($outcome === 'completed') {
+            $summary = match ($refund->reason_type) {
+                'first_time_guarantee' => 'Your request satisfied our 7-Day Money-Back Guarantee criteria and was settled back to your original payment method.',
+                'annual_prorated'      => 'Your annual subscription qualified for a prorated refund within the 30-day window (minus the ₱' . RefundPolicyService::ANNUAL_PROCESSING_FEE . ' processing fee) and was settled via PayMongo.',
+                'duplicate_charge'     => 'Our billing team verified a duplicate charge on your subscription and completed a full refund via PayMongo.',
+                'charged_after_cancel' => 'Our billing team confirmed a charge occurred after cancellation and completed a full refund via PayMongo.',
+                'service_failure'      => 'Our team verified a qualifying extended service interruption and issued a prorated refund via PayMongo.',
+                default                => 'Our billing team reviewed and approved your refund request, and PayMongo confirmed settlement.',
+            };
+
+            $items = array_merge($checks, [
+                [
+                    'status' => 'pass',
+                    'label'  => 'Approved Reason',
+                    'detail' => $this->formatReasonType($refund->reason_type),
+                ],
+                [
+                    'status' => 'pass',
+                    'label'  => 'Gateway Settlement',
+                    'detail' => 'Completed via PayMongo' . ($amountText !== '' ? " ({$amountText})" : ''),
+                ],
+            ]);
+
+            if ($adminNote !== '') {
+                $items[] = [
+                    'status' => 'info',
+                    'label'  => 'Reviewer Note',
+                    'detail' => $adminNote,
+                ];
+            }
+
+            return [
+                'title'   => 'Refund Approval & Settlement Criteria',
+                'summary' => $summary,
+                'items'   => $items,
+            ];
+        }
+
+        $failedChecks = array_values(array_filter($checks, static fn (array $item) => $item['status'] === 'fail'));
+
+        if ($adminNote !== '' && $failedChecks !== []) {
+            $summary = 'Your request did not meet all automated policy criteria and was rejected after review: ' . $adminNote;
+        } elseif ($adminNote !== '' && $eval !== []) {
+            $summary = 'Although automated initial checks passed, your request was declined following admin review: ' . $adminNote;
+        } elseif ($adminNote !== '') {
+            $summary = 'Your refund request was declined following admin review: ' . $adminNote;
+        } elseif ($policyNotes !== []) {
+            $summary = 'Your request did not meet our Refund Policy criteria: ' . implode(' ', $policyNotes);
+        } else {
+            $summary = 'Your refund request did not meet our Refund Policy eligibility criteria.';
+        }
+
+        $items = [
+            [
+                'status' => 'fail',
+                'label'  => 'Review Decision',
+                'detail' => $adminNote !== '' ? 'Rejected — ' . $adminNote : 'Rejected after policy review',
+            ],
+            [
+                'status' => 'info',
+                'label'  => 'Requested Category',
+                'detail' => $this->formatReasonType($refund->reason_type),
+            ],
+        ];
+
+        $items = array_merge($items, $checks);
+
+        if ($checks === [] && $policyNotes !== []) {
+            foreach ($policyNotes as $blocker) {
+                $items[] = [
+                    'status' => 'fail',
+                    'label'  => 'Policy Requirement',
+                    'detail' => $blocker,
+                ];
+            }
+        }
+
+        return [
+            'title'   => 'Refund Rejection Criteria & Review',
+            'summary' => $summary,
+            'items'   => $items,
+        ];
+    }
+
+    /**
+     * Convert stored eligibility snapshot fields into customer-readable criteria rows.
+     *
+     * @param  array<string, mixed>  $eval
+     * @return array<int, array{status: string, label: string, detail: string}>
+     */
+    private function evaluateRefundPolicyChecks(RefundRequest $refund, array $eval, string $outcome): array
+    {
+        if ($eval === []) {
+            return [];
+        }
+
+        $items = [];
+        $isGuaranteeClaim = $refund->reason_type === 'first_time_guarantee';
+        $isAnnualClaim = $refund->reason_type === 'annual_prorated';
+        $ruleFailStatus = static fn (bool $applicable): string => ($outcome === 'rejected' || $applicable) ? 'fail' : 'info';
+
+        if (array_key_exists('paid', $eval)) {
+            $paid = (bool) $eval['paid'];
+            $items[] = [
+                'status' => $paid ? 'pass' : 'fail',
+                'label'  => 'Verified Gateway Payment',
+                'detail' => $paid
+                    ? 'Subscription was paid via PayMongo and eligible for review.'
+                    : 'Not paid through PayMongo or already refunded.',
+            ];
+        }
+
+        if (array_key_exists('days_since_purchase', $eval)) {
+            $days = $eval['days_since_purchase'];
+            if ($isAnnualClaim) {
+                $windowOk = (bool) ($eval['annual_prorated_eligible'] ?? false)
+                    || ($days !== null && $days >= RefundPolicyService::GUARANTEE_DAYS && $days < RefundPolicyService::ANNUAL_PRORATE_DAYS);
+                $items[] = [
+                    'status' => $windowOk ? 'pass' : 'fail',
+                    'label'  => '30-Day Annual Proration Window',
+                    'detail' => $days === null
+                        ? 'Purchase start date is unavailable.'
+                        : ($windowOk
+                            ? "{$days} day(s) since purchase (eligible window: days " . RefundPolicyService::GUARANTEE_DAYS . '–' . (RefundPolicyService::ANNUAL_PRORATE_DAYS - 1) . ').'
+                            : "{$days} day(s) since purchase (outside days " . RefundPolicyService::GUARANTEE_DAYS . '–' . (RefundPolicyService::ANNUAL_PRORATE_DAYS - 1) . ' proration window).'),
+                ];
+            } else {
+                $inWindow = $days !== null && $days < RefundPolicyService::GUARANTEE_DAYS;
+                $items[] = [
+                    'status' => $inWindow ? 'pass' : $ruleFailStatus($isGuaranteeClaim),
+                    'label'  => '7-Day Guarantee Window',
+                    'detail' => $days === null
+                        ? 'Purchase start date is unavailable.'
+                        : ($inWindow
+                            ? "{$days} day(s) since purchase (within the " . RefundPolicyService::GUARANTEE_DAYS . '-day limit).'
+                            : "{$days} day(s) since purchase (exceeds the " . RefundPolicyService::GUARANTEE_DAYS . '-day limit).'),
+                ];
+            }
+        }
+
+        if (array_key_exists('is_first_purchase', $eval)) {
+            $isFirst = (bool) $eval['is_first_purchase'];
+            $items[] = [
+                'status' => $isFirst ? 'pass' : $ruleFailStatus($isGuaranteeClaim),
+                'label'  => 'First Premium Purchase',
+                'detail' => $isFirst
+                    ? 'Confirmed first paid Premium subscription on account.'
+                    : 'Account had an earlier paid Premium subscription (guarantee applies to first purchase only).',
+            ];
+        }
+
+        if (array_key_exists('premium_scans_used', $eval)) {
+            $used = (int) $eval['premium_scans_used'];
+            $cap = (int) ($eval['scan_cap'] ?? RefundPolicyService::GUARANTEE_SCAN_CAP);
+            $withinCap = $used <= $cap;
+            $items[] = [
+                'status' => $withinCap ? 'pass' : $ruleFailStatus($isGuaranteeClaim),
+                'label'  => 'Premium Scan Usage',
+                'detail' => $withinCap
+                    ? "{$used} of {$cap} allowed scans used."
+                    : "{$used} scans used (exceeds the {$cap}-scan limit).",
+            ];
+        }
+
+        if (array_key_exists('prior_guarantee_used', $eval)) {
+            $priorUsed = (bool) $eval['prior_guarantee_used'];
+            $items[] = [
+                'status' => $priorUsed ? $ruleFailStatus($isGuaranteeClaim) : 'pass',
+                'label'  => 'One Guarantee Per User',
+                'detail' => $priorUsed
+                    ? 'A 7-day guarantee refund was already used on this account.'
+                    : 'No prior 7-day guarantee refund used.',
+            ];
+        }
+
+        return $items;
     }
 }
 

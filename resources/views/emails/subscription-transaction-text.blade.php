@@ -19,6 +19,18 @@ Transaction Details:
 @endforeach
 
 @endif
+@if (!empty($tx['criteria_summary']) || !empty($tx['criteria_items']))
+{{ $tx['criteria_title'] ?? 'Eligibility & Decision Criteria' }}:
+@if (!empty($tx['criteria_summary']))
+{{ $tx['criteria_summary'] }}
+@endif
+@if (!empty($tx['criteria_items']))
+@foreach ($tx['criteria_items'] as $item)
+- [{{ match ($item['status'] ?? 'info') { 'pass' => 'PASS', 'fail' => 'UNMET', default => 'INFO' } }}] {{ $item['label'] }}: {{ $item['detail'] }}
+@endforeach
+@endif
+
+@endif
 @if (!empty($tx['note']))
 Note: {{ $tx['note'] }}
 
