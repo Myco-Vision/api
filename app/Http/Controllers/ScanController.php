@@ -24,8 +24,9 @@ class ScanController extends Controller
     /**
      * Send an uploaded image to the Flask ML /classify endpoint, retrying once
      * on transient 502/503/504 responses (e.g. cold starts or deploys on Render).
+     * When $detectOnly is true, passes detect_only=1 so ML only checks mushroom presence.
      */
-    private function classifyWithMlService(\Illuminate\Http\UploadedFile $file, int $timeoutSeconds = 90): array
+    private function classifyWithMlService(\Illuminate\Http\UploadedFile $file, int $timeoutSeconds = 90, bool $detectOnly = false): array
     {
         $mlApiUrl = rtrim((string) config('services.ml.url'), '/');
         if ($mlApiUrl === '') {
@@ -47,13 +48,14 @@ class ScanController extends Controller
         }
 
         $bytes = file_get_contents($file->path());
+        $endpoint = "{$mlApiUrl}/classify" . ($detectOnly ? '?detect_only=1' : '');
         $response = null;
 
         for ($attempt = 1; $attempt <= 2; $attempt++) {
             try {
                 $response = \Illuminate\Support\Facades\Http::timeout($timeoutSeconds)
                     ->attach('image', $bytes, $filename)
-                    ->post("{$mlApiUrl}/classify");
+                    ->post($endpoint);
 
                 if ($response->successful()) {
                     return ['ok' => true, 'data' => $response->json()];
@@ -189,12 +191,20 @@ class ScanController extends Controller
             'image' => 'required|image|max:10240',
         ]);
 
-        $mlResult = $this->classifyWithMlService($request->file('image'), 30);
+        $mlResult = $this->classifyWithMlService($request->file('image'), 30, true);
         if (! $mlResult['ok']) {
             return response()->json(['message' => $mlResult['message']], $mlResult['status']);
         }
 
-        return response()->json($mlResult['data']);
+        $mlData = $mlResult['data'] ?? [];
+        $isMushroom = array_key_exists('is_mushroom', $mlData)
+            ? (bool) $mlData['is_mushroom']
+            : (($mlData['result_classification'] ?? 'not_mushroom') !== 'not_mushroom');
+
+        return response()->json([
+            'is_mushroom' => $isMushroom,
+            'label'       => $isMushroom ? 'subject is mushroom' : 'subject not mushroom',
+        ]);
     }
 
     /**
