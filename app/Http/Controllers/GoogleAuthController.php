@@ -164,7 +164,7 @@ class GoogleAuthController extends Controller
 
         if (! Hash::check($data['password'], $user->password)) {
             return response()->json([
-                'message' => 'Incorrect password. Please enter the password you created during registration.',
+                'message' => 'Incorrect password. Please try again.',
             ], 422);
         }
 
