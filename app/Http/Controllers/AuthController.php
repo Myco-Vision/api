@@ -192,12 +192,26 @@ class AuthController extends Controller
                     ], 429);
                 }
             } catch (\Throwable $e) {
+                $rawMsg = $e->getMessage();
                 Log::error('Password reset email failed', [
                     'exception' => $e::class,
-                    'message'   => $e->getMessage(),
+                    'message'   => $rawMsg,
+                    'mailer'    => config('mail.default'),
+                    'host'      => config('mail.mailers.smtp.host'),
+                    'port'      => config('mail.mailers.smtp.port'),
                 ]);
+
+                $hint = 'Please check the mail service configuration and try again shortly.';
+                if (str_contains($rawMsg, '127.0.0.1') || str_contains($rawMsg, 'Connection refused')) {
+                    $hint = 'The server is still configured for localhost SMTP (MAIL_HOST=127.0.0.1). Set MAIL_HOST=smtp.gmail.com and MAIL_PORT=587 in your deployment environment variables, then redeploy.';
+                } elseif (str_contains($rawMsg, '535') || str_contains($rawMsg, 'authenticate') || str_contains($rawMsg, 'Failed to authenticate')) {
+                    $hint = 'SMTP authentication failed. Check MAIL_USERNAME and MAIL_PASSWORD (without surrounding quotes) in your deployment environment variables, then redeploy.';
+                } elseif (str_contains($rawMsg, 'UnsupportedScheme') || str_contains($rawMsg, 'scheme')) {
+                    $hint = 'Invalid MAIL_SCHEME configuration. Set MAIL_SCHEME=null (with MAIL_PORT=587) in your deployment environment variables.';
+                }
+
                 return response()->json([
-                    'message' => 'Could not send password reset email. Please check the mail service configuration and try again shortly.',
+                    'message' => 'Could not send password reset email. ' . $hint,
                 ], 500);
             }
         }
