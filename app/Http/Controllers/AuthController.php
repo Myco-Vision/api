@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\SubscriptionEvent;
 use App\Models\User;
 use App\Rules\LegitimateEmail;
+use App\Rules\UniqueEmail;
 use Illuminate\Auth\Events\Verified;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -29,12 +30,13 @@ class AuthController extends Controller
             'first_name'     => 'required|string|max:255',
             'last_name'      => 'required|string|max:255',
             'username'       => 'required|string|max:255|unique:users,username',
-            'email'          => ['required', 'string', 'email:rfc,dns', 'max:255', new LegitimateEmail(), 'unique:users,email'],
+            'email'          => ['required', 'string', 'email:rfc,dns', 'max:255', new LegitimateEmail(), new UniqueEmail(), 'unique:users,email'],
             'contact_number' => ['required', 'string', 'max:20', 'regex:/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/'],
             'address'        => 'required|string',
             'password'       => 'required|string|min:8|confirmed',
         ], [
             'email.email'          => 'Please enter a valid, deliverable email address.',
+            'email.unique'         => 'This email address is already registered. Please use a different email.',
             'contact_number.regex' => 'Please enter a valid Philippine mobile number (e.g. 0917 123 4567 or +63 917 123 4567).',
         ]);
 
@@ -83,11 +85,11 @@ class AuthController extends Controller
             'email.email' => 'Please enter a valid, deliverable email address.',
         ]);
 
-        $taken = User::where('email', $data['email'])->exists();
+        $taken = UniqueEmail::existsInUsers($data['email']);
 
         return response()->json([
             'available' => ! $taken,
-            'message'   => $taken ? 'This email is already registered.' : 'Email is available.',
+            'message'   => $taken ? 'This email address is already registered.' : 'Email is available.',
         ]);
     }
 
@@ -139,7 +141,7 @@ class AuthController extends Controller
             'email.email' => 'Please enter a valid, deliverable email address.',
         ]);
 
-        $user = User::where('email', $data['email'])->first();
+        $user = User::whereRaw('LOWER(email) = ?', [$data['email']])->first();
 
         if ($user && ! $user->hasVerifiedEmail()) {
             try {
@@ -234,7 +236,7 @@ class AuthController extends Controller
             'password' => 'required|string',
         ]);
 
-        $user = User::where('email', $data['email'])->first();
+        $user = User::whereRaw('LOWER(email) = ?', [$data['email']])->first();
 
         if (! $user || ! Hash::check($data['password'], $user->password)) {
             throw ValidationException::withMessages([

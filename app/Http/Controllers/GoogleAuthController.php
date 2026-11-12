@@ -45,9 +45,9 @@ class GoogleAuthController extends Controller
         $firstName = $nameParts[0] ?? $name;
         $lastName  = $nameParts[1] ?? '';
 
-        // Find existing user by google_id OR email
+        // Find existing user by google_id OR email (case-insensitive)
         $user = User::where('google_id', $googleId)
-                    ->orWhere('email', $email)
+                    ->orWhereRaw('LOWER(email) = ?', [$email])
                     ->first();
 
         if ($user) {
