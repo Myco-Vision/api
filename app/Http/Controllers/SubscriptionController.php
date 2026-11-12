@@ -249,14 +249,19 @@ class SubscriptionController extends Controller
                 'source'     => 'verify',
             ]));
 
+            $emailSent = true;
+            $emailWarning = null;
             if ($justActivated) {
-                $this->transactionEmails->sendPaymentReceipt($subscription);
+                $emailSent = $this->transactionEmails->sendPaymentReceipt($subscription);
+                $emailWarning = $this->transactionEmails->lastWarning();
             }
 
             return response()->json([
-                'message'      => 'Your subscription has been activated successfully! Unlimited mushroom scans unlocked.',
-                'subscription' => $subscription,
-                'user'         => $user->fresh(),
+                'message'       => 'Your subscription has been activated successfully! Unlimited mushroom scans unlocked.',
+                'subscription'  => $subscription,
+                'user'          => $user->fresh(),
+                'email_sent'    => $emailSent,
+                'email_warning' => $emailWarning,
             ]);
         } catch (\Exception $e) {
             Log::error('Subscription verification failed: ' . $e->getMessage());

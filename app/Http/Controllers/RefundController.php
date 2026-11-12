@@ -97,11 +97,13 @@ class RefundController extends Controller
             'refund_request_id' => $refund->id, 'reason_type' => $data['reason_type'], 'amount' => $option['amount'],
         ]);
 
-        $this->transactionEmails->sendRefundRequested($refund);
+        $emailSent = $this->transactionEmails->sendRefundRequested($refund);
 
         return response()->json([
-            'message' => 'Refund request submitted. We will reply within 3 business days.',
-            'request' => $refund,
+            'message'       => 'Refund request submitted. We will reply within 3 business days.',
+            'request'       => $refund,
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
         ], 201);
     }
 
@@ -114,9 +116,14 @@ class RefundController extends Controller
         }
         $refund->update(['status' => 'withdrawn']);
 
-        $this->transactionEmails->sendRefundWithdrawn($refund->fresh());
+        $emailSent = $this->transactionEmails->sendRefundWithdrawn($refund->fresh());
 
-        return response()->json(['message' => 'Refund request withdrawn.', 'request' => $refund]);
+        return response()->json([
+            'message'       => 'Refund request withdrawn.',
+            'request'       => $refund,
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
+        ]);
     }
 
     // ── Admin side ─────────────────────────────────────────────────────────
@@ -172,11 +179,13 @@ class RefundController extends Controller
             'refund_request_id' => $refund->id, 'reason_type' => $data['reason_type'], 'amount' => $option['amount'], 'filed_by_admin' => true,
         ]);
 
-        $this->transactionEmails->sendRefundRequested($refund);
+        $emailSent = $this->transactionEmails->sendRefundRequested($refund);
 
         return response()->json([
-            'message' => 'Refund request created. Review it in the Refunds queue.',
-            'request' => $refund->load(['user:id,name,email,username', 'subscription', 'reviewer:id,name']),
+            'message'       => 'Refund request created. Review it in the Refunds queue.',
+            'request'       => $refund->load(['user:id,name,email,username', 'subscription', 'reviewer:id,name']),
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
         ], 201);
     }
 
@@ -232,15 +241,17 @@ class RefundController extends Controller
         $refund->update(['paymongo_refund_id' => $result['id']]);
 
         if (($result['status'] ?? '') === 'succeeded') {
-            $this->finalize($refund->fresh(), $request->user()->id);
+            $emailSent = $this->finalize($refund->fresh(), $request->user()->id, $this->transactionEmails);
         } else {
             // Stays "processing" until the refund.updated webhook confirms settlement.
-            $this->transactionEmails->sendRefundProcessing($refund->fresh());
+            $emailSent = $this->transactionEmails->sendRefundProcessing($refund->fresh());
         }
 
         return response()->json([
-            'message' => $refund->fresh()->status === 'refunded' ? 'Refund issued successfully.' : 'Refund submitted to PayMongo and is processing.',
-            'request' => $refund->fresh()->load(['user:id,name,email', 'subscription', 'reviewer:id,name']),
+            'message'       => $refund->fresh()->status === 'refunded' ? 'Refund issued successfully.' : 'Refund submitted to PayMongo and is processing.',
+            'request'       => $refund->fresh()->load(['user:id,name,email', 'subscription', 'reviewer:id,name']),
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
         ]);
     }
 
@@ -260,9 +271,14 @@ class RefundController extends Controller
             'refund_request_id' => $refund->id, 'note' => $data['note'],
         ]);
 
-        $this->transactionEmails->sendRefundRejected($refund->fresh());
+        $emailSent = $this->transactionEmails->sendRefundRejected($refund->fresh());
 
-        return response()->json(['message' => 'Refund request rejected.', 'request' => $refund->load(['user:id,name,email', 'subscription', 'reviewer:id,name'])]);
+        return response()->json([
+            'message'       => 'Refund request rejected.',
+            'request'       => $refund->load(['user:id,name,email', 'subscription', 'reviewer:id,name']),
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
+        ]);
     }
 
     /**
@@ -270,8 +286,11 @@ class RefundController extends Controller
      * full refunds end Premium immediately; prorated refunds end it on processing.
      * Both cases end access now. Called from approve() and the webhook.
      */
-    public static function finalize(RefundRequest $refund, ?int $adminId = null): void
-    {
+    public static function finalize(
+        RefundRequest $refund,
+        ?int $adminId = null,
+        ?TransactionEmailService $mailer = null
+    ): bool {
         $finalized = DB::transaction(function () use ($refund, $adminId) {
             $locked = RefundRequest::whereKey($refund->id)->lockForUpdate()->first();
             if (! $locked || $locked->status === 'refunded') {
@@ -302,8 +321,10 @@ class RefundController extends Controller
         });
 
         if ($finalized) {
-            app(TransactionEmailService::class)->sendRefundCompleted($finalized);
+            return ($mailer ?? app(TransactionEmailService::class))->sendRefundCompleted($finalized);
         }
+
+        return true;
     }
 
     /**

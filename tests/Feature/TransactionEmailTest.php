@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Mail\SubscriptionTransactionMail;
 use App\Models\RefundRequest;
 use App\Models\Subscription;
+use App\Models\SubscriptionEvent;
 use App\Models\User;
 use App\Services\PayMongoService;
 use App\Services\TransactionEmailService;
@@ -415,11 +416,17 @@ class TransactionEmailTest extends TestCase
             'paymongo_session_id' => 'cs_mock_resilient',
         ]);
 
-        $this->actingAs($user)->postJson('/api/subscription/verify', [
+        $res = $this->actingAs($user)->postJson('/api/subscription/verify', [
             'session_id' => 'cs_mock_resilient',
         ])->assertOk();
 
         $this->assertEquals('active', $sub->fresh()->status);
+        $this->assertFalse($res->json('email_sent'));
+        $this->assertNotEmpty($res->json('email_warning'));
+        $this->assertDatabaseHas('subscription_events', [
+            'subscription_id' => $sub->id,
+            'action'          => 'transaction_email_failed',
+        ]);
     }
 
     public function test_deleted_user_email_fallback_receives_transaction_emails(): void
@@ -493,6 +500,56 @@ class TransactionEmailTest extends TestCase
         $this->assertCount(1, $sent);
         $this->assertEquals('REFUND SUCCESSFUL', $sent[0]->transaction['badge']);
         $this->assertStringContainsString('Successful', $sent[0]->envelope()->subject);
+    }
+
+    public function test_non_delivering_log_mailer_in_production_warns_and_logs_event(): void
+    {
+        $originalEnv = $this->app['env'];
+        $this->app['env'] = 'production';
+        config(['mail.default' => 'log']);
+
+        try {
+            $user = $this->createUser('logwarn@gmail.com');
+            $admin = $this->createUser('admin_warn@gmail.com', 'super_admin');
+
+            $sub = Subscription::create([
+                'user_id'             => $user->id,
+                'plan'                => 'monthly',
+                'status'              => 'active',
+                'price'               => 149.00,
+                'currency'            => 'PHP',
+                'paymongo_payment_id' => 'pay_warn_1',
+                'payment_method'      => 'gcash',
+                'payment_status'      => 'paid',
+                'starts_at'           => now()->subDay(),
+                'expires_at'          => now()->addDays(29),
+            ]);
+
+            $submitRes = $this->actingAs($user)->postJson('/api/refunds', [
+                'subscription_id' => $sub->id,
+                'reason_type'     => 'first_time_guarantee',
+                'reason'          => 'Testing email diagnostic warning when MAIL_MAILER is log.',
+            ])->assertCreated();
+
+            $this->assertFalse($submitRes->json('email_sent'));
+            $this->assertStringContainsString("MAIL_MAILER is set to 'log'", (string) $submitRes->json('email_warning'));
+
+            $refundId = $submitRes->json('request.id');
+            $rejectRes = $this->actingAs($admin)->postJson("/api/admin/refunds/{$refundId}/reject", [
+                'note' => 'Outside policy criteria.',
+            ])->assertOk();
+
+            $this->assertFalse($rejectRes->json('email_sent'));
+            $this->assertStringContainsString("MAIL_MAILER is set to 'log'", (string) $rejectRes->json('email_warning'));
+
+            $failures = SubscriptionEvent::where('subscription_id', $sub->id)
+                ->where('action', 'transaction_email_failed')
+                ->get();
+            $this->assertCount(2, $failures);
+            $this->assertEquals(['refund_requested', 'refund_rejected'], $failures->pluck('details.email_type')->all());
+        } finally {
+            $this->app['env'] = $originalEnv;
+        }
     }
 
     private function createUser(string $email, string $role = 'forager'): User

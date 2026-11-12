@@ -143,7 +143,7 @@ return [
     */
 
     'from' => [
-        'address' => $cleanMailEnv('MAIL_FROM_ADDRESS', 'hello@example.com'),
+        'address' => $cleanMailEnv('MAIL_FROM_ADDRESS', $cleanMailEnv('MAIL_USERNAME', 'hello@example.com')),
         'name' => $cleanMailEnv('MAIL_FROM_NAME', $cleanMailEnv('APP_NAME', 'Laravel')),
     ],
 

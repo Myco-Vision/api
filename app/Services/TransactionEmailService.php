@@ -5,9 +5,12 @@ namespace App\Services;
 use App\Mail\SubscriptionTransactionMail;
 use App\Models\RefundRequest;
 use App\Models\Subscription;
+use App\Models\SubscriptionEvent;
+use App\Support\MailDiagnostics;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Testing\Fakes\MailFake;
 
 /**
  * Builds and dispatches transaction receipt/status emails for subscription payments and refunds.
@@ -16,6 +19,27 @@ use Illuminate\Support\Facades\Mail;
 class TransactionEmailService
 {
     private const DISPLAY_TIMEZONE = 'Asia/Manila';
+
+    /** @var array{sent: bool, mailer: string, recipient: ?string, warning: ?string} */
+    private array $lastDelivery = [
+        'sent'      => false,
+        'mailer'    => 'log',
+        'recipient' => null,
+        'warning'   => null,
+    ];
+
+    /**
+     * @return array{sent: bool, mailer: string, recipient: ?string, warning: ?string}
+     */
+    public function lastDelivery(): array
+    {
+        return $this->lastDelivery;
+    }
+
+    public function lastWarning(): ?string
+    {
+        return $this->lastDelivery['warning'];
+    }
 
     /**
      * Send an itemized receipt when a paid subscription activates.
@@ -64,6 +88,8 @@ class TransactionEmailService
         ];
 
         return $this->deliver($email, $payload, 'Subscription payment receipt email failed', [
+            'email_type'      => 'payment_receipt',
+            'user_id'         => $subscription->user_id,
             'subscription_id' => $subscription->id,
         ]);
     }
@@ -103,6 +129,9 @@ class TransactionEmailService
         ];
 
         return $this->deliver($email, $payload, 'Refund requested email failed', [
+            'email_type'        => 'refund_requested',
+            'user_id'           => $refund->user_id,
+            'subscription_id'   => $refund->subscription_id,
             'refund_request_id' => $refund->id,
         ]);
     }
@@ -144,6 +173,9 @@ class TransactionEmailService
         ];
 
         return $this->deliver($email, $payload, 'Refund processing email failed', [
+            'email_type'        => 'refund_processing',
+            'user_id'           => $refund->user_id,
+            'subscription_id'   => $refund->subscription_id,
             'refund_request_id' => $refund->id,
         ]);
     }
@@ -185,6 +217,9 @@ class TransactionEmailService
         ];
 
         return $this->deliver($email, $payload, 'Refund completed receipt email failed', [
+            'email_type'        => 'refund_completed',
+            'user_id'           => $refund->user_id,
+            'subscription_id'   => $refund->subscription_id,
             'refund_request_id' => $refund->id,
         ]);
     }
@@ -215,6 +250,9 @@ class TransactionEmailService
         ];
 
         return $this->deliver($email, $payload, 'Refund rejected email failed', [
+            'email_type'        => 'refund_rejected',
+            'user_id'           => $refund->user_id,
+            'subscription_id'   => $refund->subscription_id,
             'refund_request_id' => $refund->id,
         ]);
     }
@@ -256,6 +294,9 @@ class TransactionEmailService
         ];
 
         return $this->deliver($email, $payload, 'Refund failed email failed', [
+            'email_type'        => 'refund_failed',
+            'user_id'           => $refund->user_id,
+            'subscription_id'   => $refund->subscription_id,
             'refund_request_id' => $refund->id,
         ]);
     }
@@ -285,6 +326,9 @@ class TransactionEmailService
         ];
 
         return $this->deliver($email, $payload, 'Refund withdrawn email failed', [
+            'email_type'        => 'refund_withdrawn',
+            'user_id'           => $refund->user_id,
+            'subscription_id'   => $refund->subscription_id,
             'refund_request_id' => $refund->id,
         ]);
     }
@@ -321,20 +365,83 @@ class TransactionEmailService
 
     private function deliver(?string $email, array $payload, string $logContext, array $context = []): bool
     {
+        $mailer = (string) config('mail.default');
+
         if (! $email || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $warning = 'No valid recipient email address on file.';
             Log::info($logContext . ': skipped because no valid recipient email exists.', $context);
+            $this->recordFailureEvent($context, $email, $warning);
+            $this->lastDelivery = [
+                'sent'      => false,
+                'mailer'    => $mailer,
+                'recipient' => $email,
+                'warning'   => $warning,
+            ];
+
+            return false;
+        }
+
+        $isFaked = Mail::getFacadeRoot() instanceof MailFake;
+        if (! $isFaked && ($configWarning = MailDiagnostics::configurationWarning()) !== null) {
+            Log::warning($logContext . ': ' . $configWarning, $context);
+            $this->recordFailureEvent($context, $email, $configWarning);
+            $this->lastDelivery = [
+                'sent'      => false,
+                'mailer'    => $mailer,
+                'recipient' => $email,
+                'warning'   => $configWarning,
+            ];
+
             return false;
         }
 
         try {
             Mail::to($email)->send(new SubscriptionTransactionMail($payload));
+            $this->lastDelivery = [
+                'sent'      => true,
+                'mailer'    => $mailer,
+                'recipient' => $email,
+                'warning'   => null,
+            ];
+
             return true;
         } catch (\Throwable $e) {
-            Log::error($logContext . ': ' . $e->getMessage(), array_merge($context, [
-                'exception' => $e::class,
-                'mailer'    => config('mail.default'),
-            ]));
+            $hint = MailDiagnostics::diagnose($logContext, $e, $context);
+            $this->recordFailureEvent($context, $email, $hint);
+            $this->lastDelivery = [
+                'sent'      => false,
+                'mailer'    => $mailer,
+                'recipient' => $email,
+                'warning'   => $hint,
+            ];
+
             return false;
+        }
+    }
+
+    /**
+     * Persist non-fatal email delivery failures to subscription_events for admin/server visibility.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function recordFailureEvent(array $context, ?string $email, string $reason): void
+    {
+        try {
+            SubscriptionEvent::log(
+                $context['user_id'] ?? null,
+                'transaction_email_failed',
+                $context['subscription_id'] ?? null,
+                null,
+                array_filter([
+                    'email_type'        => $context['email_type'] ?? null,
+                    'refund_request_id' => $context['refund_request_id'] ?? null,
+                    'recipient'         => $email,
+                    'mailer'            => config('mail.default'),
+                    'reason'            => $reason,
+                ], static fn ($value) => $value !== null && $value !== '')
+            );
+        } catch (\Throwable) {
+            // Diagnostics persistence must never break checkout or refund workflows.
         }
     }
 
