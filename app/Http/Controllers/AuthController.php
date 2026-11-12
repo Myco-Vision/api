@@ -192,23 +192,7 @@ class AuthController extends Controller
                     ], 429);
                 }
             } catch (\Throwable $e) {
-                $rawMsg = $e->getMessage();
-                Log::error('Password reset email failed', [
-                    'exception' => $e::class,
-                    'message'   => $rawMsg,
-                    'mailer'    => config('mail.default'),
-                    'host'      => config('mail.mailers.smtp.host'),
-                    'port'      => config('mail.mailers.smtp.port'),
-                ]);
-
-                $hint = 'Please check the mail service configuration and try again shortly.';
-                if (str_contains($rawMsg, '127.0.0.1') || str_contains($rawMsg, 'Connection refused')) {
-                    $hint = 'The server is still configured for localhost SMTP (MAIL_HOST=127.0.0.1). Set MAIL_HOST=smtp.gmail.com and MAIL_PORT=587 in your deployment environment variables, then redeploy.';
-                } elseif (str_contains($rawMsg, '535') || str_contains($rawMsg, 'authenticate') || str_contains($rawMsg, 'Failed to authenticate')) {
-                    $hint = 'SMTP authentication failed. Check MAIL_USERNAME and MAIL_PASSWORD (without surrounding quotes) in your deployment environment variables, then redeploy.';
-                } elseif (str_contains($rawMsg, 'UnsupportedScheme') || str_contains($rawMsg, 'scheme')) {
-                    $hint = 'Invalid MAIL_SCHEME configuration. Set MAIL_SCHEME=null (with MAIL_PORT=587) in your deployment environment variables.';
-                }
+                $hint = $this->logAndDiagnoseMailError('Password reset email failed', $e);
 
                 return response()->json([
                     'message' => 'Could not send password reset email. ' . $hint,
@@ -614,5 +598,79 @@ class AuthController extends Controller
         }
 
         return true;
+    }
+
+    /**
+     * Log the sanitized mail failure and return an actionable configuration hint.
+     */
+    private function logAndDiagnoseMailError(string $context, \Throwable $e): string
+    {
+        $mailer = (string) config('mail.default');
+        $host = (string) config('mail.mailers.smtp.host');
+        $port = (string) config('mail.mailers.smtp.port');
+        $safeMsg = $this->sanitizeMailError($e->getMessage());
+
+        Log::error($context, [
+            'exception' => $e::class,
+            'message'   => $safeMsg,
+            'mailer'    => $mailer,
+            'host'      => $host,
+            'port'      => $port,
+        ]);
+
+        if (str_contains($safeMsg, '127.0.0.1') || str_contains($safeMsg, 'Connection refused')) {
+            return 'The server is still configured for localhost SMTP (MAIL_HOST=127.0.0.1). Set MAIL_HOST=smtp.gmail.com and MAIL_PORT=587 in your deployment environment variables, then redeploy.';
+        }
+
+        if (
+            ($mailer === 'smtp' && str_contains($host, '@'))
+            || str_contains($safeMsg, 'getaddrinfo')
+            || str_contains($safeMsg, 'php_network_getaddresses')
+            || str_contains($safeMsg, 'Name or service not known')
+        ) {
+            $hostLabel = $host !== '' ? $host : 'empty';
+            return "Cannot resolve MAIL_HOST ({$hostLabel}). Set MAIL_HOST=smtp.gmail.com (with a dot, not @) and MAIL_PORT=587 in your deployment environment variables, then redeploy.";
+        }
+
+        if (str_contains($safeMsg, '535') || str_contains($safeMsg, '534') || stripos($safeMsg, 'authenticat') !== false) {
+            return 'SMTP authentication failed. Check MAIL_USERNAME and MAIL_PASSWORD (16-character Google App Password without underscores or surrounding quotes) in your deployment environment variables, then redeploy.';
+        }
+
+        if (str_contains($safeMsg, 'STARTTLS') || str_contains($safeMsg, 'stream_socket_enable_crypto') || str_contains($safeMsg, '530')) {
+            return "TLS/SSL handshake failed on {$host}:{$port}. Set MAIL_PORT=587 with MAIL_SCHEME=null (or MAIL_PORT=465 with MAIL_SCHEME=ssl) in your deployment environment variables, then redeploy.";
+        }
+
+        if (str_contains($safeMsg, 'UnsupportedScheme') || stripos($safeMsg, 'scheme') !== false) {
+            return 'Invalid MAIL_SCHEME configuration. Set MAIL_SCHEME=null (with MAIL_PORT=587) in your deployment environment variables, then redeploy.';
+        }
+
+        if (str_contains($safeMsg, 'is not defined') || str_contains($safeMsg, 'Unsupported mail transport')) {
+            return "Invalid MAIL_MAILER ({$mailer}). Set MAIL_MAILER=smtp without extra spaces or quotes in your deployment environment variables, then redeploy.";
+        }
+
+        if (str_contains($safeMsg, 'RFC 2822') || str_contains($safeMsg, '"From"') || str_contains($safeMsg, '"Sender"')) {
+            return 'Invalid MAIL_FROM_ADDRESS configuration. Set MAIL_FROM_ADDRESS to a valid email address without quotes in your deployment environment variables, then redeploy.';
+        }
+
+        if (stripos($safeMsg, 'timed out') !== false || str_contains($safeMsg, 'Connection could not be established')) {
+            return "Could not connect to SMTP server {$host}:{$port} (" . Str::limit($safeMsg, 120) . '). Check MAIL_HOST, MAIL_PORT, and outbound SMTP access, then try again.';
+        }
+
+        return 'Mail error [' . class_basename($e) . " via {$mailer}]: " . Str::limit($safeMsg, 140);
+    }
+
+    /**
+     * Strip configured secret values from an exception message before logging or returning it.
+     */
+    private function sanitizeMailError(string $message): string
+    {
+        $secrets = array_filter([
+            config('mail.mailers.smtp.password'),
+            config('mail.mailers.smtp.username'),
+            config('database.connections.pgsql.password'),
+            config('app.key'),
+        ], static fn ($val) => is_string($val) && $val !== '');
+
+        return str_replace($secrets, '[redacted]', $message);
     }
 }
