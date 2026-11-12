@@ -399,18 +399,15 @@ class SubscriptionController extends Controller
             return; // already settled (or never approved) — nothing to do
         }
 
-        $failed    = $type === 'refund' && $status === 'failed';
+        $failed    = $type === 'refund' && in_array($status, ['failed', 'rejected'], true);
         $succeeded = $event === 'payment.refunded' || $status === 'succeeded';
 
         if ($failed) {
-            $refund->update([
-                'status'     => 'failed',
-                'admin_note' => trim(($refund->admin_note ?? '') . "\n[Gateway] PayMongo reported the refund as failed."),
-            ]);
-            SubscriptionEvent::log($refund->user_id, 'refund_failed', $refund->subscription_id, $refund->reviewed_by, [
-                'refund_request_id' => $refund->id,
-            ]);
-            $this->transactionEmails->sendRefundFailed($refund->fresh(), 'PayMongo reported the refund as failed.');
+            RefundController::markFailed(
+                $refund,
+                'PayMongo reported the refund as ' . ($status ?: 'failed') . '.',
+                $refund->reviewed_by
+            );
             return;
         }
 

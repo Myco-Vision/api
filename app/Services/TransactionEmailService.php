@@ -159,7 +159,7 @@ class TransactionEmailService
         $amount = (float) ($refund->approved_amount ?? $refund->requested_amount ?? 0);
         $amountText = $this->formatCurrency($amount, $this->currencyFor($refund));
 
-        $details = $this->baseRefundDetails($refund, 'Refunded');
+        $details = $this->baseRefundDetails($refund, 'Refund Successful');
         $details[] = ['label' => 'Refunded Amount', 'value' => $amountText];
         $details[] = ['label' => 'Refunded At',     'value' => $this->formatTimestamp($refund->refunded_at ?? now())];
 
@@ -169,12 +169,12 @@ class TransactionEmailService
         }
 
         $payload = [
-            'subject'        => "MycoVision Refund Receipt (#{$refund->id} — {$amountText})",
-            'badge'          => 'REFUND ISSUED',
+            'subject'        => "MycoVision Refund Successful (#{$refund->id} — {$amountText})",
+            'badge'          => 'REFUND SUCCESSFUL',
             'badge_tone'     => 'success',
-            'heading'        => 'Refund Transaction Receipt',
+            'heading'        => 'Your Refund Was Successful',
             'recipient_name' => $name,
-            'intro'          => "Your refund of {$amountText} for MycoVision {$this->formatPlanName($refund->subscription?->plan)} has been completed.",
+            'intro'          => "Your refund of {$amountText} for MycoVision {$this->formatPlanName($refund->subscription?->plan)} was successful and has been issued to your payment method.",
             'amount_label'   => 'Amount Refunded',
             'amount_display' => $amountText,
             'details'        => $details,
@@ -197,16 +197,16 @@ class TransactionEmailService
         $refund->loadMissing(['user', 'subscription']);
         [$email, $name] = $this->resolveRecipient($refund);
 
-        $details = $this->baseRefundDetails($refund, 'Not Approved');
+        $details = $this->baseRefundDetails($refund, 'Rejected');
         $details[] = ['label' => 'Reviewed At', 'value' => $this->formatTimestamp($refund->reviewed_at ?? now())];
 
         $payload = [
-            'subject'        => "MycoVision Refund Request Update (#{$refund->id})",
-            'badge'          => 'NOT APPROVED',
-            'badge_tone'     => 'warning',
-            'heading'        => 'Refund Request Not Approved',
+            'subject'        => "MycoVision Refund Request Rejected (#{$refund->id})",
+            'badge'          => 'REFUND REJECTED',
+            'badge_tone'     => 'danger',
+            'heading'        => 'Your Refund Request Was Rejected',
             'recipient_name' => $name,
-            'intro'          => "After reviewing refund request #{$refund->id}, we were unable to approve it.",
+            'intro'          => "After reviewing refund request #{$refund->id}, your refund request was rejected.",
             'details'        => $details,
             'note'           => $refund->admin_note ? 'Reviewer note: ' . $refund->admin_note : null,
             'cta_label'      => 'View Refund Policy',

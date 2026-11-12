@@ -279,7 +279,7 @@ class TransactionEmailTest extends TestCase
         $sent = Mail::sent(SubscriptionTransactionMail::class);
         $this->assertCount(2, $sent);
         $this->assertEquals('REFUND REQUESTED', $sent[0]->transaction['badge']);
-        $this->assertEquals('REFUND ISSUED', $sent[1]->transaction['badge']);
+        $this->assertEquals('REFUND SUCCESSFUL', $sent[1]->transaction['badge']);
         $this->assertStringContainsString('149.00 PHP', $sent[1]->transaction['amount_display']);
     }
 
@@ -358,7 +358,7 @@ class TransactionEmailTest extends TestCase
             ->values()
             ->all();
 
-        $this->assertEquals(['REFUND PROCESSING', 'REFUND FAILED', 'NOT APPROVED'], $badges);
+        $this->assertEquals(['REFUND PROCESSING', 'REFUND FAILED', 'REFUND REJECTED'], $badges);
     }
 
     public function test_admin_created_and_withdrawn_refund_requests_send_emails(): void
@@ -441,6 +441,58 @@ class TransactionEmailTest extends TestCase
         app(TransactionEmailService::class)->sendPaymentReceipt($deletedSub);
 
         Mail::assertSent(SubscriptionTransactionMail::class, fn ($m) => $m->hasTo('former_member@gmail.com'));
+    }
+
+    public function test_processing_refund_auto_settles_and_sends_successful_email_when_webhook_missed(): void
+    {
+        Mail::fake();
+        $user = $this->createUser('syncuser@gmail.com');
+        $admin = $this->createUser('admin_sync@gmail.com', 'super_admin');
+
+        $sub = Subscription::create([
+            'user_id'             => $user->id,
+            'plan'                => 'monthly',
+            'status'              => 'active',
+            'price'               => 149.00,
+            'currency'            => 'PHP',
+            'paymongo_payment_id' => 'pay_sync_1',
+            'payment_method'      => 'gcash',
+            'payment_status'      => 'paid',
+            'starts_at'           => now()->subDay(),
+            'expires_at'          => now()->addDays(29),
+        ]);
+
+        $refund = RefundRequest::create([
+            'user_id'            => $user->id,
+            'subscription_id'    => $sub->id,
+            'reviewed_by'        => $admin->id,
+            'reviewed_at'        => now(),
+            'reason_type'        => 'changed_mind',
+            'reason'             => 'No longer needed within 7-day guarantee.',
+            'requested_amount'   => 149.00,
+            'approved_amount'    => 149.00,
+            'refund_type'        => 'full',
+            'status'             => 'processing',
+            'paymongo_refund_id' => 'ref_sync_123',
+        ]);
+
+        $mock = Mockery::mock(PayMongoService::class);
+        $mock->shouldReceive('getRefund')
+            ->once()
+            ->with('ref_sync_123')
+            ->andReturn(['id' => 'ref_sync_123', 'status' => 'succeeded']);
+        $this->app->instance(PayMongoService::class, $mock);
+
+        $this->actingAs($user)->getJson('/api/refunds')->assertOk();
+        $this->actingAs($user)->getJson('/api/refunds')->assertOk();
+
+        $this->assertEquals('refunded', $refund->fresh()->status);
+        $this->assertEquals('refunded', $sub->fresh()->payment_status);
+
+        $sent = Mail::sent(SubscriptionTransactionMail::class);
+        $this->assertCount(1, $sent);
+        $this->assertEquals('REFUND SUCCESSFUL', $sent[0]->transaction['badge']);
+        $this->assertStringContainsString('Successful', $sent[0]->envelope()->subject);
     }
 
     private function createUser(string $email, string $role = 'forager'): User

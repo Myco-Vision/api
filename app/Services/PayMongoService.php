@@ -319,4 +319,35 @@ class PayMongoService
             'mode'   => 'paymongo_live',
         ];
     }
+
+    /**
+     * Fetch the latest status of an async PayMongo refund resource.
+     *
+     * @return array{id: string, status: string}|null
+     */
+    public function getRefund(string $refundId): ?array
+    {
+        if (str_starts_with($refundId, 'ref_mock_') || ! $this->isRealCredentialsConfigured()) {
+            return [
+                'id'     => $refundId,
+                'status' => 'succeeded',
+            ];
+        }
+
+        $response = Http::withHeaders([
+            'Accept'        => 'application/json',
+            'Authorization' => 'Basic ' . base64_encode($this->secretKey . ':'),
+        ])->get("{$this->apiUrl}/refunds/{$refundId}");
+
+        if (! $response->successful()) {
+            return null;
+        }
+
+        $data = $response->json('data');
+
+        return [
+            'id'     => $data['id'] ?? $refundId,
+            'status' => $data['attributes']['status'] ?? 'pending',
+        ];
+    }
 }
