@@ -172,7 +172,7 @@ class AuthController extends Controller
             'email.email' => 'Please enter a valid, deliverable email address.',
         ]);
 
-        $user = User::where('email', $data['email'])->first();
+        $user = User::whereRaw('LOWER(email) = ?', [$data['email']])->first();
 
         if ($user && $this->requiresEmailVerification($user)) {
             return response()->json([
@@ -183,7 +183,24 @@ class AuthController extends Controller
             ], 403);
         }
 
-        Password::sendResetLink(['email' => $data['email']]);
+        if ($user) {
+            try {
+                $status = Password::sendResetLink(['email' => $user->email]);
+                if ($status === Password::RESET_THROTTLED) {
+                    return response()->json([
+                        'message' => 'A reset link was just sent. Please wait a minute before trying again.',
+                    ], 429);
+                }
+            } catch (\Throwable $e) {
+                Log::error('Password reset email failed', [
+                    'exception' => $e::class,
+                    'message'   => $e->getMessage(),
+                ]);
+                return response()->json([
+                    'message' => 'Could not send password reset email. Please check the mail service configuration and try again shortly.',
+                ], 500);
+            }
+        }
 
         // Generic message — never reveal whether the email actually exists.
         return response()->json([
@@ -198,14 +215,22 @@ class AuthController extends Controller
             'email' => strtolower(trim((string) $request->input('email', ''))),
         ]);
 
-        $request->validate([
+        $data = $request->validate([
             'token'    => 'required|string',
             'email'    => 'required|email',
             'password' => 'required|string|min:8|confirmed',
         ]);
 
+        $matchedUser = User::whereRaw('LOWER(email) = ?', [$data['email']])->first();
+        $credentials = [
+            'email'                 => $matchedUser?->email ?? $data['email'],
+            'password'              => $data['password'],
+            'password_confirmation' => $request->input('password_confirmation'),
+            'token'                 => $data['token'],
+        ];
+
         $status = Password::reset(
-            $request->only('email', 'password', 'password_confirmation', 'token'),
+            $credentials,
             function ($user, $password) {
                 $user->forceFill([
                     'password' => $password,
