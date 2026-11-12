@@ -17,7 +17,8 @@ Route::middleware('throttle:20,1')->group(function () {
     Route::post('/register',       [AuthController::class, 'register']);
     Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
     Route::post('/login',          [AuthController::class, 'login']);
-    Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
+    Route::post('/auth/google',                 [GoogleAuthController::class, 'handleToken']);
+    Route::post('/auth/google/verify-password', [GoogleAuthController::class, 'verifyPassword']);
     Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
     Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
     Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
