@@ -3,10 +3,12 @@
 use App\Http\Controllers\AccountManagementController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminRetrainController;
+use App\Http\Controllers\AdminRewardController;
 use App\Http\Controllers\AdminSubscriptionController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\GoogleAuthController;
 use App\Http\Controllers\RefundController;
+use App\Http\Controllers\RewardController;
 use App\Http\Controllers\ScanController;
 use App\Http\Controllers\SpeciesController;
 use App\Http\Controllers\SubscriptionController;
@@ -49,6 +51,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/subscription/verify',   [SubscriptionController::class, 'verify']);
     Route::post('/subscription/cancel',   [SubscriptionController::class, 'cancel']);
 
+    // Rewards
+    Route::get('/rewards', [RewardController::class, 'index']);
+
     // Refunds (own)
     Route::get('/refunds',                    [RefundController::class, 'mine']);
     Route::post('/refunds',                   [RefundController::class, 'store'])->middleware('throttle:10,1');
@@ -84,6 +89,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/retrain/candidates', [AdminRetrainController::class, 'candidates']);
         Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
         Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
+
+        // Reward System Controls
+        Route::get('/rewards',          [AdminRewardController::class, 'index']);
+        Route::put('/rewards/settings', [AdminRewardController::class, 'updateSettings']);
+        Route::post('/rewards/adjust',  [AdminRewardController::class, 'adjust']);
 
         // Species management (read + write)
         Route::get('/species',              [SpeciesController::class, 'index']);

@@ -118,7 +118,11 @@ class ScanController extends Controller
             'notes'                 => $data['notes'] ?? null,
         ]);
 
-        return response()->json($scan->load('species'), 201);
+        $rewardResult = (new \App\Services\RewardService())->awardForScan($user, $scan);
+        $scanPayload = $scan->load('species')->toArray();
+        $scanPayload['reward'] = $rewardResult;
+
+        return response()->json($scanPayload, 201);
     }
 
     public function preview(Request $request)

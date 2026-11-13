@@ -190,6 +190,13 @@ class AdminRetrainController extends Controller
             // so flag these scans to keep them out of future retrain runs.
             Scan::whereIn('id', $sentScanIds)->update(['retrained_at' => now()]);
 
+            // Award retrain bonus points to contributors
+            $rewardService = new \App\Services\RewardService();
+            $retrainedScans = Scan::whereIn('id', $sentScanIds)->get();
+            foreach ($retrainedScans as $retrainedScan) {
+                $rewardService->awardForRetrain($retrainedScan);
+            }
+
             return response()->json(array_merge($body, [
                 'edible_queued'    => $edibleCount,
                 'poisonous_queued' => $poisonousCount,

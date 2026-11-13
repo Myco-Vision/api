@@ -7,6 +7,7 @@ use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
 use App\Models\User;
 use App\Services\PayMongoService;
+use App\Services\RewardService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -14,10 +15,12 @@ use Illuminate\Support\Facades\Log;
 class SubscriptionController extends Controller
 {
     protected PayMongoService $payMongoService;
+    protected RewardService $rewardService;
 
-    public function __construct(PayMongoService $payMongoService)
+    public function __construct(PayMongoService $payMongoService, RewardService $rewardService)
     {
         $this->payMongoService = $payMongoService;
+        $this->rewardService = $rewardService;
     }
 
     /**
@@ -82,6 +85,18 @@ class SubscriptionController extends Controller
                             'session'     => $sessionData,
                         ]),
                     ]);
+
+                    $pointsUsed = (int) ($pending->metadata['points_used'] ?? 0);
+                    if ($pointsUsed > 0) {
+                        $this->rewardService->redeemPoints(
+                            $user,
+                            $pointsUsed,
+                            'subscription_discount',
+                            "Applied {$pointsUsed} pts discount on {$planKey} subscription",
+                            'subscription',
+                            $pending->id
+                        );
+                    }
                 }
             } catch (\Throwable $e) {
                 Log::warning("Auto-sync pending subscription {$pending->paymongo_session_id} skipped: " . $e->getMessage());
@@ -114,6 +129,8 @@ class SubscriptionController extends Controller
             'free_limit'          => User::FREE_SCAN_LIMIT,
             'scans_used'          => $scansUsed,
             'remaining_scans'     => $user->remaining_scans, // -1 means unlimited
+            'reward_points'       => (int) $user->fresh()->reward_points,
+            'reward_settings'     => $this->rewardService->getSettings(),
             'active_subscription' => $activeSub ? [
                 'id'             => $activeSub->id,
                 'plan'           => $activeSub->plan,
@@ -140,6 +157,7 @@ class SubscriptionController extends Controller
         $data = $request->validate([
             'plan'           => 'required|string|in:monthly,annual',
             'payment_method' => 'nullable|string|in:gcash',
+            'points_to_use'  => 'nullable|integer|min:0',
             'success_url'    => 'nullable|string',
             'cancel_url'     => 'nullable|string',
         ]);
@@ -152,13 +170,60 @@ class SubscriptionController extends Controller
             return response()->json(['message' => 'Invalid subscription plan selected.'], 422);
         }
 
+        $requestedPoints = (int) ($data['points_to_use'] ?? 0);
+        $discount = $this->rewardService->calculateDiscount($user, $planDetails['amount'], $requestedPoints);
+
+        // Full redemption using reward points (no PayMongo checkout needed)
+        if ($discount['is_full_redemption']) {
+            $startsAt = Carbon::now();
+            $expiresAt = $planKey === 'annual' ? Carbon::now()->addYear() : Carbon::now()->addMonth();
+
+            $subscription = Subscription::create([
+                'user_id'             => $user->id,
+                'plan'                => $planKey,
+                'status'              => 'active',
+                'price'               => 0,
+                'currency'            => $planDetails['currency'],
+                'payment_method'      => 'reward_points',
+                'paymongo_session_id' => 'pts_' . bin2hex(random_bytes(8)),
+                'starts_at'           => $startsAt,
+                'expires_at'          => $expiresAt,
+                'metadata'            => [
+                    'mode'           => 'reward_points',
+                    'points_used'    => $discount['points_used'],
+                    'discount_php'   => $discount['discount_php'],
+                    'original_price' => $planDetails['amount'],
+                    'ip_address'     => $request->ip(),
+                ],
+            ]);
+
+            $this->rewardService->redeemPoints(
+                $user,
+                $discount['points_used'],
+                'subscription_redemption',
+                "Redeemed {$discount['points_used']} pts for {$planDetails['name']}",
+                'subscription',
+                $subscription->id
+            );
+
+            return response()->json([
+                'redeemed_full' => true,
+                'message'       => "Your {$planDetails['name']} has been activated using {$discount['points_used']} reward points!",
+                'subscription'  => $subscription,
+                'user'          => $user->fresh(),
+                'discount'      => $discount,
+            ]);
+        }
+
         try {
             $session = $this->payMongoService->createCheckoutSession(
                 $user,
                 $planKey,
                 $data['success_url'] ?? null,
                 $data['cancel_url'] ?? null,
-                $data['payment_method'] ?? 'all'
+                $data['payment_method'] ?? 'all',
+                $discount['final_centavos'],
+                $discount['discount_php']
             );
 
             // Record pending subscription in DB
@@ -166,21 +231,26 @@ class SubscriptionController extends Controller
                 'user_id'             => $user->id,
                 'plan'                => $planKey,
                 'status'              => 'pending',
-                'price'               => $planDetails['amount'],
+                'price'               => $discount['final_amount_php'],
                 'currency'            => $planDetails['currency'],
                 'payment_method'      => $session['payment_method'] ?? ($data['payment_method'] ?? 'gcash'),
                 'paymongo_session_id' => $session['session_id'],
                 'metadata'            => [
-                    'mode'       => $session['mode'] ?? 'standard',
-                    'ip_address' => $request->ip(),
+                    'mode'           => $session['mode'] ?? 'standard',
+                    'points_used'    => $discount['points_used'],
+                    'discount_php'   => $discount['discount_php'],
+                    'original_price' => $planDetails['amount'],
+                    'ip_address'     => $request->ip(),
                 ],
             ]);
 
             return response()->json([
-                'checkout_url' => $session['checkout_url'],
-                'session_id'   => $session['session_id'],
-                'plan'         => $planDetails,
-                'mode'         => $session['mode'] ?? 'standard',
+                'redeemed_full' => false,
+                'checkout_url'  => $session['checkout_url'],
+                'session_id'    => $session['session_id'],
+                'plan'          => $planDetails,
+                'discount'      => $discount,
+                'mode'          => $session['mode'] ?? 'standard',
             ]);
         } catch (\Exception $e) {
             Log::error('Checkout initiation failed: ' . $e->getMessage());
@@ -261,7 +331,7 @@ class SubscriptionController extends Controller
                 $subscription->update([
                     'plan'                   => $planKey,
                     'status'                 => 'active',
-                    'price'                  => $sessionData['amount'] > 0 ? $sessionData['amount'] : $planDetails['amount'],
+                    'price'                  => $sessionData['amount'] > 0 ? $sessionData['amount'] : $subscription->price,
                     'currency'               => $sessionData['currency'] ?? 'PHP',
                     'paymongo_payment_id'    => $sessionData['payment_id'] ?? null,
                     'payment_method'         => $sessionData['payment_method'] ?? 'paymongo',
@@ -272,6 +342,18 @@ class SubscriptionController extends Controller
                         'session'     => $sessionData,
                     ]),
                 ]);
+
+                $pointsUsed = (int) ($subscription->metadata['points_used'] ?? 0);
+                if ($pointsUsed > 0) {
+                    $this->rewardService->redeemPoints(
+                        $user,
+                        $pointsUsed,
+                        'subscription_discount',
+                        "Applied {$pointsUsed} pts discount on {$planKey} subscription",
+                        'subscription',
+                        $subscription->id
+                    );
+                }
             } else {
                 $subscription = Subscription::create([
                     'user_id'                => $user->id,
@@ -370,6 +452,21 @@ class SubscriptionController extends Controller
                         'starts_at'           => $startsAt,
                         'expires_at'          => $expiresAt,
                     ]);
+
+                    $pointsUsed = (int) ($sub->metadata['points_used'] ?? 0);
+                    if ($pointsUsed > 0 && $sub->user_id) {
+                        $subUser = User::find($sub->user_id);
+                        if ($subUser) {
+                            $this->rewardService->redeemPoints(
+                                $subUser,
+                                $pointsUsed,
+                                'subscription_discount',
+                                "Applied {$pointsUsed} pts discount on {$planKey} subscription",
+                                'subscription',
+                                $sub->id
+                            );
+                        }
+                    }
                 }
             }
         }

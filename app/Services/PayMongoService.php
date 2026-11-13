@@ -80,12 +80,24 @@ class PayMongoService
     /**
      * Create PayMongo Checkout Session
      */
-    public function createCheckoutSession(User $user, string $planKey, ?string $successUrl = null, ?string $cancelUrl = null, ?string $paymentMethod = 'all'): array
-    {
+    public function createCheckoutSession(
+        User $user,
+        string $planKey,
+        ?string $successUrl = null,
+        ?string $cancelUrl = null,
+        ?string $paymentMethod = 'all',
+        ?int $overrideCentavos = null,
+        int $discountPhp = 0
+    ): array {
         $plan = $this->getPlan($planKey);
         if (!$plan) {
             throw new \InvalidArgumentException("Invalid subscription plan: {$planKey}");
         }
+
+        $finalCentavos = $overrideCentavos ?? $plan['centavos'];
+        $lineItemName = $discountPhp > 0
+            ? "MycoVision {$plan['name']} (₱{$discountPhp} Reward Points Discount)"
+            : "MycoVision {$plan['name']}";
 
         $frontendUrl = rtrim(config('services.frontend.url'), '/');
         $successUrl  = $successUrl ?: "{$frontendUrl}/users/subscription?status=success&session_id={CHECKOUT_SESSION_ID}";
@@ -144,8 +156,8 @@ class PayMongoService
                         'line_items' => [
                             [
                                 'currency'    => 'PHP',
-                                'amount'      => $plan['centavos'],
-                                'name'        => "MycoVision {$plan['name']}",
+                                'amount'      => $finalCentavos,
+                                'name'        => $lineItemName,
                                 'description' => $plan['description'],
                                 'quantity'    => 1,
                             ],
@@ -205,7 +217,7 @@ class PayMongoService
                 'paid'           => true,
                 'payment_id'     => 'pay_mock_' . substr($sessionId, 8),
                 'payment_method' => 'gcash',
-                'amount'         => 149.00,
+                'amount'         => 0,
                 'currency'       => 'PHP',
                 'status'         => 'paid',
                 'mode'           => 'sandbox_simulator',

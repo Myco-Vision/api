@@ -30,6 +30,7 @@ class User extends Authenticatable
         'profile_photo',
         'allow_data_training',
         'data_training_consented_at',
+        'reward_points',
     ];
 
     protected $hidden = [
@@ -50,6 +51,7 @@ class User extends Authenticatable
             'email_verified_at'        => 'datetime',
             'password'                 => 'hashed',
             'needs_profile_completion' => 'boolean',
+            'reward_points'            => 'integer',
         ];
     }
 
@@ -76,6 +78,11 @@ class User extends Authenticatable
     public function refundRequests()
     {
         return $this->hasMany(RefundRequest::class);
+    }
+
+    public function pointTransactions()
+    {
+        return $this->hasMany(PointTransaction::class);
     }
 
     public function activeSubscription()
