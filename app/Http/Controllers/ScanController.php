@@ -193,6 +193,124 @@ class ScanController extends Controller
         return response()->json($scan->fresh());
     }
 
+    // GET /api/scans/map
+    public function map(Request $request)
+    {
+        $user = $request->user();
+        $isSubscribed = $user->hasActiveSubscription();
+        $scope = $request->input('scope', 'mine') === 'community' ? 'community' : 'mine';
+
+        if ($scope === 'community' && !$isSubscribed) {
+            return response()->json([
+                'error'   => 'PREMIUM_REQUIRED',
+                'message' => 'Community sightings & regional toxicity alerts require a Premium subscription.',
+            ], 403);
+        }
+
+        $query = Scan::with('species:id,name,scientific_name,classification')
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude');
+
+        if ($scope === 'mine') {
+            $query->where('user_id', $user->id);
+        } else {
+            $query->where('is_public_sighting', true);
+        }
+
+        // Apply filters (full filtering for Premium; basic mine view for Free)
+        if ($isSubscribed || $scope === 'mine') {
+            $classification = $request->input('classification');
+            if (in_array($classification, ['edible', 'poisonous'], true)) {
+                $query->where('result_classification', $classification);
+            }
+
+            if ($search = trim((string) $request->input('search', ''))) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('result_name', 'like', "%{$search}%")
+                      ->orWhere('location_name', 'like', "%{$search}%");
+                });
+            }
+
+            if ($from = $request->input('date_from')) {
+                $query->whereDate('created_at', '>=', $from);
+            }
+            if ($to = $request->input('date_to')) {
+                $query->whereDate('created_at', '<=', $to);
+            }
+        }
+
+        $query->latest('id');
+
+        if ($scope === 'mine' && !$isSubscribed) {
+            $query->take(\App\Models\User::FREE_SCAN_LIMIT);
+        } else {
+            $query->take(200);
+        }
+
+        $pins = $query->get()->map(function (Scan $scan) use ($scope, $user) {
+            $isOwner = $scan->user_id === $user->id;
+            return [
+                'id'                    => $scan->id,
+                'is_owner'              => $isOwner,
+                'result_name'           => $scan->result_name,
+                'result_classification' => $scan->result_classification,
+                'confidence_level'      => $scan->confidence_level,
+                'latitude'              => $scope === 'community' ? round((float) $scan->latitude, 2) : (float) $scan->latitude,
+                'longitude'             => $scope === 'community' ? round((float) $scan->longitude, 2) : (float) $scan->longitude,
+                'location_name'         => $scan->location_name,
+                'location_source'       => $scan->location_source,
+                'notes'                 => $isOwner ? $scan->notes : null,
+                'is_public_sighting'    => $isOwner ? (bool) $scan->is_public_sighting : true,
+                'image_url'             => $scan->image_url,
+                'species'               => $scan->species,
+                'created_at'            => $scan->created_at?->toIso8601String(),
+            ];
+        })->values();
+
+        $unpinned = [];
+        if ($scope === 'mine') {
+            $unpinned = $user->scans()
+                ->where(function ($q) {
+                    $q->whereNull('latitude')->orWhereNull('longitude');
+                })
+                ->latest('id')
+                ->take(20)
+                ->get(['id', 'result_name', 'result_classification', 'image_path', 'created_at']);
+        }
+
+        return response()->json([
+            'scope'          => $scope,
+            'is_subscribed'  => $isSubscribed,
+            'pins'           => $pins,
+            'unpinned_scans' => $unpinned,
+        ]);
+    }
+
+    // PATCH /api/scans/{scan}/details
+    public function updateDetails(Request $request, Scan $scan)
+    {
+        if ($scan->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $data = $request->validate([
+            'notes'              => 'nullable|string|max:1000',
+            'is_public_sighting' => 'nullable|boolean',
+        ]);
+
+        $updates = [];
+        if (array_key_exists('notes', $data)) {
+            $updates['notes'] = $data['notes'];
+        }
+        if (array_key_exists('is_public_sighting', $data)) {
+            $updates['is_public_sighting'] = (bool) $data['is_public_sighting'];
+        }
+
+        $scan->update($updates);
+
+        return response()->json($scan->fresh());
+    }
+
     // DELETE /api/scans/{scan}
     public function destroy(Request $request, Scan $scan)
     {

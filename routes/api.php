@@ -60,12 +60,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/refunds/{refund}/cancel',   [RefundController::class, 'withdraw']);
 
     // Scans (own)
-    Route::get('/scans',          [ScanController::class, 'index']);
-    Route::post('/scans',         [ScanController::class, 'store']);
-    Route::get('/scans/{scan}',   [ScanController::class, 'show']);
-    Route::post('/scans/preview', [ScanController::class, 'preview']);
-    Route::patch('/scans/{scan}/location', [ScanController::class, 'updateLocation']);
-    Route::delete('/scans/{scan}',[ScanController::class, 'destroy']);
+    Route::get('/scans',                  [ScanController::class, 'index']);
+    Route::get('/scans/map',              [ScanController::class, 'map']);
+    Route::post('/scans',                 [ScanController::class, 'store']);
+    Route::get('/scans/{scan}',           [ScanController::class, 'show']);
+    Route::post('/scans/preview',         [ScanController::class, 'preview']);
+    Route::patch('/scans/{scan}/location',[ScanController::class, 'updateLocation']);
+    Route::patch('/scans/{scan}/details', [ScanController::class, 'updateDetails']);
+    Route::delete('/scans/{scan}',        [ScanController::class, 'destroy']);
 
     // ── Admin-only routes ────────────────────────────────────────────────────
     Route::middleware('admin')->prefix('admin')->group(function () {

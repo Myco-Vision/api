@@ -21,11 +21,13 @@ class Scan extends Model
         'location_name',
         'location_source',
         'notes',
+        'is_public_sighting',
         'retrained_at',
     ];
 
     protected $casts = [
-        'retrained_at' => 'datetime',
+        'retrained_at'       => 'datetime',
+        'is_public_sighting' => 'boolean',
     ];
 
     protected $appends = [

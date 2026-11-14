@@ -112,7 +112,7 @@ class SubscriptionController extends Controller
 
         $daysRemaining = null;
         if ($activeSub && $activeSub->expires_at) {
-            $daysRemaining = max(0, Carbon::now()->diffInDays($activeSub->expires_at, false));
+            $daysRemaining = (int) ceil(max(0, Carbon::now()->diffInDays($activeSub->expires_at, false)));
         }
 
         $history = $user->subscriptions()
