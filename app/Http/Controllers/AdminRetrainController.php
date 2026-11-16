@@ -783,7 +783,7 @@ class AdminRetrainController extends Controller
             return $flaskHistory;
         }
 
-        $dbRuns = RetrainRun::latest('id')->take(20)->get()->map->toHistoryArray()->all();
+        $dbRuns = RetrainRun::with('triggeredBy:id,name')->latest('id')->take(20)->get()->map->toHistoryArray()->all();
 
         $knownTimestamps = array_filter(array_map(
             fn ($item) => isset($item['started_at']) ? strtotime((string) $item['started_at']) : null,
@@ -847,6 +847,13 @@ class AdminRetrainController extends Controller
 
             if (Schema::hasTable('retrain_runs')) {
                 $runningRun = RetrainRun::where('status', 'running')->latest('id')->first();
+                if (! $runningRun) {
+                    // Check if there is an unfinalized run from the last 30 minutes
+                    $runningRun = RetrainRun::where('scans_marked_retrained', false)
+                        ->where('created_at', '>=', now()->subMinutes(30))
+                        ->latest('id')
+                        ->first();
+                }
 
                 if ($runningRun) {
                     if ($state === 'done') {
@@ -871,7 +878,7 @@ class AdminRetrainController extends Controller
                             && $flaskTs >= $runningRun->started_at->timestamp - 60
                         ) {
                             $scansUpdated = $this->applyDoneState($runningRun, $flaskData);
-                        } elseif ($runningRun->started_at && $runningRun->started_at->lt(now()->subSeconds(10))) {
+                        } elseif ($runningRun->status === 'running' && $runningRun->started_at && $runningRun->started_at->lt(now()->subMinutes(10))) {
                             $runningRun->update([
                                 'status'      => 'failed',
                                 'finished_at' => now(),
