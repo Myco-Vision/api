@@ -538,9 +538,11 @@ class AdminRetrainController extends Controller
             $groups[] = [
                 'group_id'                 => $groupIdCounter++,
                 'match_type'               => $matchType,
+                'match_types'              => [$matchType],
                 'similarity'               => $similarity,
                 'has_conflict'             => $hasConflict,
                 'classification'           => $groupClass,
+                'classifications'          => array_values($classifications),
                 'total_count'              => count($memberScans),
                 'primary_scan_id'          => $primaryScan->id,
                 'recommended_unselect_ids' => $groupUnselectIds,
