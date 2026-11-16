@@ -7,6 +7,7 @@ use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
 use App\Services\PayMongoService;
 use App\Services\RefundPolicyService;
+use App\Services\TransactionEmailService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -19,6 +20,7 @@ class RefundController extends Controller
     public function __construct(
         protected RefundPolicyService $policy,
         protected PayMongoService $payMongo,
+        protected TransactionEmailService $transactionEmails,
     ) {}
 
     // ── User side ──────────────────────────────────────────────────────────
@@ -27,6 +29,7 @@ class RefundController extends Controller
     public function mine(Request $request)
     {
         $user = $request->user();
+        $this->syncProcessingRefunds($user->id);
 
         $subs = $user->subscriptions()->latest('id')->take(10)->get()
             ->filter(fn ($s) => $this->policy->isPaid($s))
@@ -94,9 +97,13 @@ class RefundController extends Controller
             'refund_request_id' => $refund->id, 'reason_type' => $data['reason_type'], 'amount' => $option['amount'],
         ]);
 
+        $emailSent = $this->transactionEmails->sendRefundRequested($refund);
+
         return response()->json([
-            'message' => 'Refund request submitted. We will reply within 3 business days.',
-            'request' => $refund,
+            'message'       => 'Refund request submitted. We will reply within 3 business days.',
+            'request'       => $refund,
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
         ], 201);
     }
 
@@ -109,7 +116,14 @@ class RefundController extends Controller
         }
         $refund->update(['status' => 'withdrawn']);
 
-        return response()->json(['message' => 'Refund request withdrawn.', 'request' => $refund]);
+        $emailSent = $this->transactionEmails->sendRefundWithdrawn($refund->fresh());
+
+        return response()->json([
+            'message'       => 'Refund request withdrawn.',
+            'request'       => $refund,
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
+        ]);
     }
 
     // ── Admin side ─────────────────────────────────────────────────────────
@@ -117,6 +131,8 @@ class RefundController extends Controller
     // GET /api/admin/refunds
     public function index(Request $request)
     {
+        $this->syncProcessingRefunds();
+
         $refunds = RefundRequest::with(['user:id,name,email,username', 'subscription', 'reviewer:id,name'])
             ->when($request->status, fn ($q, $s) => $q->where('status', $s))
             ->when($request->search, fn ($q, $s) => $q->whereHas('user', fn ($u) => $u
@@ -163,9 +179,13 @@ class RefundController extends Controller
             'refund_request_id' => $refund->id, 'reason_type' => $data['reason_type'], 'amount' => $option['amount'], 'filed_by_admin' => true,
         ]);
 
+        $emailSent = $this->transactionEmails->sendRefundRequested($refund);
+
         return response()->json([
-            'message' => 'Refund request created. Review it in the Refunds queue.',
-            'request' => $refund->load(['user:id,name,email,username', 'subscription', 'reviewer:id,name']),
+            'message'       => 'Refund request created. Review it in the Refunds queue.',
+            'request'       => $refund->load(['user:id,name,email,username', 'subscription', 'reviewer:id,name']),
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
         ], 201);
     }
 
@@ -214,20 +234,24 @@ class RefundController extends Controller
             );
         } catch (\Throwable $e) {
             Log::error("Refund #{$refund->id} failed: " . $e->getMessage());
-            $refund->update(['status' => 'failed', 'admin_note' => trim(($data['note'] ?? '') . "\n[Gateway] " . $e->getMessage())]);
+            self::markFailed($refund, $e->getMessage(), $request->user()->id);
             return response()->json(['message' => $e->getMessage(), 'request' => $refund->fresh()], 502);
         }
 
         $refund->update(['paymongo_refund_id' => $result['id']]);
 
         if (($result['status'] ?? '') === 'succeeded') {
-            $this->finalize($refund->fresh(), $request->user()->id);
+            $emailSent = $this->finalize($refund->fresh(), $request->user()->id, $this->transactionEmails);
+        } else {
+            // Stays "processing" until the refund.updated webhook confirms settlement.
+            $emailSent = $this->transactionEmails->sendRefundProcessing($refund->fresh());
         }
-        // Otherwise stays "processing" until the refund.updated webhook confirms it.
 
         return response()->json([
-            'message' => $refund->fresh()->status === 'refunded' ? 'Refund issued successfully.' : 'Refund submitted to PayMongo and is processing.',
-            'request' => $refund->fresh()->load(['user:id,name,email', 'subscription', 'reviewer:id,name']),
+            'message'       => $refund->fresh()->status === 'refunded' ? 'Refund issued successfully.' : 'Refund submitted to PayMongo and is processing.',
+            'request'       => $refund->fresh()->load(['user:id,name,email', 'subscription', 'reviewer:id,name']),
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
         ]);
     }
 
@@ -247,7 +271,14 @@ class RefundController extends Controller
             'refund_request_id' => $refund->id, 'note' => $data['note'],
         ]);
 
-        return response()->json(['message' => 'Refund request rejected.', 'request' => $refund->load(['user:id,name,email', 'subscription', 'reviewer:id,name'])]);
+        $emailSent = $this->transactionEmails->sendRefundRejected($refund->fresh());
+
+        return response()->json([
+            'message'       => 'Refund request rejected.',
+            'request'       => $refund->load(['user:id,name,email', 'subscription', 'reviewer:id,name']),
+            'email_sent'    => $emailSent,
+            'email_warning' => $this->transactionEmails->lastWarning(),
+        ]);
     }
 
     /**
@@ -255,15 +286,21 @@ class RefundController extends Controller
      * full refunds end Premium immediately; prorated refunds end it on processing.
      * Both cases end access now. Called from approve() and the webhook.
      */
-    public static function finalize(RefundRequest $refund, ?int $adminId = null): void
-    {
-        if ($refund->status === 'refunded') return; // idempotent
+    public static function finalize(
+        RefundRequest $refund,
+        ?int $adminId = null,
+        ?TransactionEmailService $mailer = null
+    ): bool {
+        $finalized = DB::transaction(function () use ($refund, $adminId) {
+            $locked = RefundRequest::whereKey($refund->id)->lockForUpdate()->first();
+            if (! $locked || $locked->status === 'refunded') {
+                return null; // idempotent
+            }
 
-        DB::transaction(function () use ($refund, $adminId) {
-            $refund->update(['status' => 'refunded', 'refunded_at' => now()]);
+            $locked->update(['status' => 'refunded', 'refunded_at' => now()]);
 
-            $sub = $refund->subscription;
-            $isFull = (float) $refund->approved_amount >= (float) $sub->price;
+            $sub = $locked->subscription;
+            $isFull = (float) $locked->approved_amount >= (float) $sub->price;
 
             $sub->update([
                 'status'         => 'cancelled',
@@ -273,12 +310,78 @@ class RefundController extends Controller
                 'payment_status' => $isFull ? 'refunded' : 'partially_refunded',
             ]);
 
-            SubscriptionEvent::log($refund->user_id, 'refunded', $sub->id, $adminId ?? $refund->reviewed_by, [
-                'refund_request_id'  => $refund->id,
-                'amount'             => $refund->approved_amount,
-                'type'               => $refund->refund_type,
-                'paymongo_refund_id' => $refund->paymongo_refund_id,
+            SubscriptionEvent::log($locked->user_id, 'refunded', $sub->id, $adminId ?? $locked->reviewed_by, [
+                'refund_request_id'  => $locked->id,
+                'amount'             => $locked->approved_amount,
+                'type'               => $locked->refund_type,
+                'paymongo_refund_id' => $locked->paymongo_refund_id,
             ]);
+
+            return $locked->fresh();
         });
+
+        if ($finalized) {
+            return ($mailer ?? app(TransactionEmailService::class))->sendRefundCompleted($finalized);
+        }
+
+        return true;
+    }
+
+    /**
+     * Atomically mark a refund as failed and email the user once.
+     */
+    public static function markFailed(RefundRequest $refund, string $gatewayMessage, ?int $actorId = null): void
+    {
+        $failed = DB::transaction(function () use ($refund, $gatewayMessage, $actorId) {
+            $locked = RefundRequest::whereKey($refund->id)->lockForUpdate()->first();
+            if (! $locked || in_array($locked->status, ['failed', 'refunded'], true)) {
+                return null;
+            }
+
+            $locked->update([
+                'status'     => 'failed',
+                'admin_note' => trim(($locked->admin_note ?? '') . "\n[Gateway] " . $gatewayMessage),
+            ]);
+
+            SubscriptionEvent::log($locked->user_id, 'refund_failed', $locked->subscription_id, $actorId ?? $locked->reviewed_by, [
+                'refund_request_id' => $locked->id,
+                'message'           => $gatewayMessage,
+            ]);
+
+            return $locked->fresh();
+        });
+
+        if ($failed) {
+            app(TransactionEmailService::class)->sendRefundFailed($failed, $gatewayMessage);
+        }
+    }
+
+    /**
+     * Settle any "processing" PayMongo refunds when webhooks are delayed or unavailable.
+     */
+    private function syncProcessingRefunds(?int $userId = null): void
+    {
+        $processing = RefundRequest::where('status', 'processing')
+            ->whereNotNull('paymongo_refund_id')
+            ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
+            ->latest('id')
+            ->take(10)
+            ->get();
+
+        foreach ($processing as $refund) {
+            try {
+                $remote = $this->payMongo->getRefund($refund->paymongo_refund_id);
+            } catch (\Throwable $e) {
+                Log::warning("Refund #{$refund->id} status sync failed: " . $e->getMessage());
+                continue;
+            }
+
+            $status = $remote['status'] ?? null;
+            if ($status === 'succeeded') {
+                self::finalize($refund, $refund->reviewed_by);
+            } elseif (in_array($status, ['failed', 'rejected'], true)) {
+                self::markFailed($refund, "PayMongo reported the refund as {$status}.", $refund->reviewed_by);
+            }
+        }
     }
 }

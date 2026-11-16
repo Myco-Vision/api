@@ -50,7 +50,8 @@ return [
     |
     */
 
-    'expiration' => 1440, // 24 hours
+    // Keep personal access tokens valid until logout/revocation unless SANCTUM_EXPIRATION is set.
+    'expiration' => env('SANCTUM_EXPIRATION'),
 
     /*
     |--------------------------------------------------------------------------

@@ -10,15 +10,18 @@ Route::get('/', function () {
 // When uploads live in object storage (PUBLIC_DISK_DRIVER=s3) or local storage,
 // serve or redirect /storage/{path} gracefully.
 Route::get('/storage/{path}', function (string $path) {
+    $path = ltrim($path, '/');
+
     if (config('filesystems.disks.public.driver') === 's3') {
-        $supabaseUrl = env('AWS_URL');
-        if ($supabaseUrl) {
-            return redirect()->away(rtrim($supabaseUrl, '/') . '/' . ltrim($path, '/'));
+        $publicUrl = config('filesystems.disks.public.url');
+        if ($publicUrl) {
+            return redirect()->away(rtrim($publicUrl, '/') . '/' . $path);
         }
-        return redirect()->away(Storage::disk('public')->url($path));
     }
-    if (!Storage::disk('public')->exists($path)) {
+
+    if (! Storage::disk('public')->exists($path)) {
         abort(404);
     }
+
     return Storage::disk('public')->response($path);
 })->where('path', '.*');

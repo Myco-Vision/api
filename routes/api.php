@@ -19,9 +19,12 @@ Route::middleware('throttle:20,1')->group(function () {
     Route::post('/register',       [AuthController::class, 'register']);
     Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
     Route::post('/login',          [AuthController::class, 'login']);
-    Route::post('/auth/google',    [GoogleAuthController::class, 'handleToken']);
+    Route::post('/auth/google',                 [GoogleAuthController::class, 'handleToken']);
+    Route::post('/auth/google/verify-password', [GoogleAuthController::class, 'verifyPassword']);
     Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
     Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
+    Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
+    Route::post('/email/verification-notification', [AuthController::class, 'resendVerification'])->middleware('throttle:6,1');
 });
 
 // Public species listing (users can browse without logging in)
@@ -38,6 +41,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Auth
     Route::post('/logout',           [AuthController::class, 'logout']);
     Route::get('/me',                [AuthController::class, 'me']);
+    Route::put('/me',                [AuthController::class, 'updateMe']);
     Route::put('/user/consent',      [AuthController::class, 'updateConsent']);
     Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
     Route::post('/change-password',  [AuthController::class, 'changePassword']);
@@ -63,8 +67,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/scans',                  [ScanController::class, 'index']);
     Route::get('/scans/map',              [ScanController::class, 'map']);
     Route::post('/scans',                 [ScanController::class, 'store']);
-    Route::get('/scans/{scan}',           [ScanController::class, 'show']);
+    Route::post('/scans/warmup',          [ScanController::class, 'warmup']);
     Route::post('/scans/preview',         [ScanController::class, 'preview']);
+    Route::get('/scans/{scan}',           [ScanController::class, 'show']);
     Route::patch('/scans/{scan}/location',[ScanController::class, 'updateLocation']);
     Route::patch('/scans/{scan}/details', [ScanController::class, 'updateDetails']);
     Route::delete('/scans/{scan}',        [ScanController::class, 'destroy']);
@@ -72,8 +77,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // ── Admin-only routes ────────────────────────────────────────────────────
     Route::middleware('admin')->prefix('admin')->group(function () {
 
-        // Dashboard stats
-        Route::get('/dashboard', [AdminController::class, 'dashboard']);
+        // Dashboard stats & alerts
+        Route::get('/dashboard',     [AdminController::class, 'dashboard']);
+        Route::get('/notifications', [AdminController::class, 'notifications']);
 
         // User management
         Route::get('/users',           [AdminController::class, 'users']);
@@ -89,8 +95,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // AI Retraining
         Route::get('/retrain/candidates', [AdminRetrainController::class, 'candidates']);
+        Route::get('/retrain/duplicates', [AdminRetrainController::class, 'duplicates']);
         Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
         Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
+        Route::post('/retrain/restore',   [AdminRetrainController::class, 'restore']);
+        Route::post('/retrain/exclude',   [AdminRetrainController::class, 'exclude']);
+        Route::post('/retrain/refresh',   [AdminRetrainController::class, 'refreshMl']);
 
         // Reward System Controls
         Route::get('/rewards',          [AdminRewardController::class, 'index']);
@@ -129,8 +139,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/accounts',                       [AccountManagementController::class, 'store']);
         Route::get('/accounts/{user}',                 [AccountManagementController::class, 'show']);
         Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
-        Route::delete('/accounts/{user}',              [AccountManagementController::class, 'destroy']);
-        Route::post('/accounts/{user}/reset-password', [AccountManagementController::class, 'resetPassword']);
+        Route::delete('/accounts/{user}',                      [AccountManagementController::class, 'destroy']);
+        Route::post('/accounts/{user}/reset-password',         [AccountManagementController::class, 'resetPassword']);
+        Route::post('/accounts/{user}/resend-verification',    [AccountManagementController::class, 'resendVerification']);
 
         // Approving a refund issues real money through PayMongo
         Route::post('/refunds/{refund}/approve',       [RefundController::class, 'approve']);

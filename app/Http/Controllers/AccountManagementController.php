@@ -3,11 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Rules\LegitimateEmail;
+use App\Rules\UniqueEmail;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class AccountManagementController extends Controller
 {
+    // Same Philippine mobile format enforced at self-registration (0917 123 4567 / +63 917 123 4567)
+    private const PH_MOBILE_REGEX = 'regex:/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/';
+    private const PH_MOBILE_MESSAGE = 'Please enter a valid Philippine mobile number (e.g. 0917 123 4567 or +63 917 123 4567).';
 
     public function index(Request $request)
     {
@@ -43,32 +49,54 @@ class AccountManagementController extends Controller
      */
     public function store(Request $request)
     {
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
+        ]);
+
         $data = $request->validate([
             'first_name'     => 'required|string|max:255',
             'last_name'      => 'required|string|max:255',
             'username'       => 'required|string|max:255|unique:users,username',
-            'email'          => 'required|email|unique:users,email',
+            'email'          => ['required', 'string', 'email:rfc,dns', 'max:255', new LegitimateEmail(), new UniqueEmail(), 'unique:users,email'],
             'password'       => 'required|string|min:8',
             'role'           => 'required|in:forager,admin,super_admin',
-            'contact_number' => 'nullable|string|max:255',
+            'contact_number' => ['nullable', 'string', 'max:20', self::PH_MOBILE_REGEX],
             'address'        => 'nullable|string',
+        ], [
+            'email.email'          => 'Please enter a valid, deliverable email address.',
+            'email.unique'         => 'This email address is already registered. Please use a different email.',
+            'contact_number.regex' => self::PH_MOBILE_MESSAGE,
         ]);
 
-        $user = User::create([
-            'name'           => $data['first_name'] . ' ' . $data['last_name'],
-            'first_name'     => $data['first_name'],
-            'last_name'      => $data['last_name'],
-            'username'       => $data['username'],
-            'email'          => $data['email'],
-            'password'       => $data['password'],
-            'role'           => $data['role'],
-            'contact_number' => $data['contact_number'] ?? '',
-            'address'        => $data['address'] ?? '',
-        ]);
+        try {
+            $user = DB::transaction(function () use ($data) {
+                $user = User::create([
+                    'name'           => $data['first_name'] . ' ' . $data['last_name'],
+                    'first_name'     => $data['first_name'],
+                    'last_name'      => $data['last_name'],
+                    'username'       => $data['username'],
+                    'email'          => $data['email'],
+                    'password'       => $data['password'],
+                    'role'           => $data['role'],
+                    'contact_number' => $data['contact_number'] ?? '',
+                    'address'        => $data['address'] ?? '',
+                ]);
+
+                $user->sendEmailVerificationNotification();
+
+                return $user;
+            });
+        } catch (\Throwable $e) {
+            Log::error('Admin account creation verification email failed', ['message' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Could not send verification email to that address. Please check the email and try again.',
+            ], 500);
+        }
 
         return response()->json([
-            'message' => 'Account created successfully.',
-            'user'    => $user,
+            'message'               => 'Account created. A verification link has been sent to ' . $user->email . '.',
+            'requires_verification' => true,
+            'user'                  => $user,
         ], 201);
     }
 
@@ -97,24 +125,53 @@ class AccountManagementController extends Controller
             return response()->json(['message' => 'You cannot change your own role.'], 403);
         }
 
+        if ($request->has('email')) {
+            $request->merge([
+                'email' => strtolower(trim((string) $request->input('email', ''))),
+            ]);
+        }
+
         $data = $request->validate([
             'first_name'     => 'sometimes|string|max:255',
             'last_name'      => 'sometimes|string|max:255',
             'username'       => "sometimes|string|max:255|unique:users,username,{$user->id}",
-            'email'          => "sometimes|email|unique:users,email,{$user->id}",
+            'email'          => ['sometimes', 'string', 'email:rfc,dns', 'max:255', new LegitimateEmail(), new UniqueEmail($user->id), "unique:users,email,{$user->id}"],
             'role'           => 'sometimes|in:forager,admin,super_admin',
-            'contact_number' => 'sometimes|nullable|string|max:255',
+            'contact_number' => ['sometimes', 'nullable', 'string', 'max:20', self::PH_MOBILE_REGEX],
             'address'        => 'sometimes|nullable|string',
+        ], [
+            'email.email'          => 'Please enter a valid, deliverable email address.',
+            'email.unique'         => 'This email address is already registered. Please use a different email.',
+            'contact_number.regex' => self::PH_MOBILE_MESSAGE,
         ]);
 
         if (isset($data['first_name']) || isset($data['last_name'])) {
             $data['name'] = ($data['first_name'] ?? $user->first_name) . ' ' . ($data['last_name'] ?? $user->last_name);
         }
 
-        $user->update($data);
+        $emailChanged = isset($data['email']) && $data['email'] !== strtolower((string) $user->email);
+
+        try {
+            DB::transaction(function () use ($user, $data, $emailChanged) {
+                $user->update($data);
+
+                if ($emailChanged) {
+                    $user->forceFill(['email_verified_at' => null])->save();
+                    $user->tokens()->delete();
+                    $user->sendEmailVerificationNotification();
+                }
+            });
+        } catch (\Throwable $e) {
+            Log::error('Admin account update verification email failed', ['message' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Could not send verification email to the updated address. Changes were not saved.',
+            ], 500);
+        }
 
         return response()->json([
-            'message' => 'Account updated successfully.',
+            'message' => $emailChanged
+                ? 'Account updated. A verification link has been sent to ' . $user->email . '.'
+                : 'Account updated successfully.',
             'user'    => $user->fresh(),
         ]);
     }
@@ -158,5 +215,31 @@ class AccountManagementController extends Controller
         $user->tokens()->delete();
 
         return response()->json(['message' => 'Password reset successfully.']);
+    }
+
+    /**
+     * POST /api/admin/accounts/{user}/resend-verification
+     * Resend email verification link for an unverified account.
+     */
+    public function resendVerification(User $user)
+    {
+        if ($user->hasVerifiedEmail()) {
+            return response()->json([
+                'message' => 'This account is already verified.',
+            ]);
+        }
+
+        try {
+            $user->sendEmailVerificationNotification();
+        } catch (\Throwable $e) {
+            Log::error('Admin resend verification email failed', ['message' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Could not send verification email. Please try again.',
+            ], 500);
+        }
+
+        return response()->json([
+            'message' => 'Verification email sent to ' . $user->email . '.',
+        ]);
     }
 }

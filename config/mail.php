@@ -1,5 +1,31 @@
 <?php
 
+// Trim whitespace, strip accidental surrounding quotes from dashboard env UIs,
+// and treat empty or literal "null" strings as unset so defaults apply cleanly.
+$cleanMailEnv = static function (string $key, mixed $default = null): mixed {
+    $value = env($key);
+
+    if ($value === null) {
+        return $default;
+    }
+
+    if (is_string($value)) {
+        $value = trim($value);
+        if (
+            strlen($value) >= 2
+            && (($value[0] === '"' && $value[-1] === '"') || ($value[0] === "'" && $value[-1] === "'"))
+        ) {
+            $value = trim(substr($value, 1, -1));
+        }
+
+        if ($value === '' || strtolower($value) === 'null') {
+            return $default;
+        }
+    }
+
+    return $value;
+};
+
 return [
 
     /*
@@ -14,7 +40,7 @@ return [
     |
     */
 
-    'default' => env('MAIL_MAILER', 'log'),
+    'default' => strtolower((string) $cleanMailEnv('MAIL_MAILER', 'log')),
 
     /*
     |--------------------------------------------------------------------------
@@ -39,14 +65,20 @@ return [
 
         'smtp' => [
             'transport' => 'smtp',
-            'scheme' => env('MAIL_SCHEME'),
-            'url' => env('MAIL_URL'),
-            'host' => env('MAIL_HOST', '127.0.0.1'),
-            'port' => env('MAIL_PORT', 2525),
-            'username' => env('MAIL_USERNAME'),
-            'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
-            'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // Normalize common encryption aliases ('tls'/'ssl') to valid Symfony Mailer DSN schemes
+            'scheme' => match (strtolower((string) $cleanMailEnv('MAIL_SCHEME', ''))) {
+                ''      => null,
+                'tls'   => 'smtp',
+                'ssl'   => 'smtps',
+                default => strtolower((string) $cleanMailEnv('MAIL_SCHEME', '')),
+            },
+            'url' => $cleanMailEnv('MAIL_URL'),
+            'host' => (string) $cleanMailEnv('MAIL_HOST', '127.0.0.1'),
+            'port' => (int) $cleanMailEnv('MAIL_PORT', 2525),
+            'username' => $cleanMailEnv('MAIL_USERNAME'),
+            'password' => $cleanMailEnv('MAIL_PASSWORD'),
+            'timeout' => ($mailTimeout = $cleanMailEnv('MAIL_TIMEOUT')) !== null ? (int) $mailTimeout : 15,
+            'local_domain' => $cleanMailEnv('MAIL_EHLO_DOMAIN', parse_url((string) $cleanMailEnv('APP_URL', 'http://localhost'), PHP_URL_HOST) ?: 'localhost'),
         ],
 
         'ses' => [
@@ -111,8 +143,8 @@ return [
     */
 
     'from' => [
-        'address' => env('MAIL_FROM_ADDRESS', 'hello@example.com'),
-        'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Laravel')),
+        'address' => $cleanMailEnv('MAIL_FROM_ADDRESS', $cleanMailEnv('MAIL_USERNAME', 'hello@example.com')),
+        'name' => $cleanMailEnv('MAIL_FROM_NAME', $cleanMailEnv('APP_NAME', 'Laravel')),
     ],
 
 ];

@@ -33,7 +33,8 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // Disabled so Laravel does not override our public /storage/{path} route with signed-URL ServeFile 403s.
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],
