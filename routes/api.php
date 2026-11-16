@@ -88,9 +88,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // AI Retraining
         Route::get('/retrain/candidates', [AdminRetrainController::class, 'candidates']);
+        Route::get('/retrain/duplicates', [AdminRetrainController::class, 'duplicates']);
         Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
         Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
         Route::post('/retrain/restore',   [AdminRetrainController::class, 'restore']);
+        Route::post('/retrain/exclude',   [AdminRetrainController::class, 'exclude']);
         Route::post('/retrain/refresh',   [AdminRetrainController::class, 'refreshMl']);
 
         // Species management (read + write)

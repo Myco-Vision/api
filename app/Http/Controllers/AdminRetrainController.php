@@ -92,22 +92,132 @@ class AdminRetrainController extends Controller
         // 3. Fallback: fetch from public S3/Supabase URL if configured while using local disk
         $publicBaseUrl = config('filesystems.disks.s3.url') ?: env('AWS_URL');
         if ($publicBaseUrl) {
-            $remoteUrl = rtrim((string) $publicBaseUrl, '/') . '/' . ltrim($imagePath, '/');
-            try {
-                $res = Http::timeout(15)->get($remoteUrl);
-                if ($res->successful() && $res->body() !== '') {
-                    return [
-                        'contents' => $res->body(),
-                        'filename' => basename($imagePath),
-                    ];
+            $host = parse_url($publicBaseUrl, PHP_URL_HOST);
+            if ($host && ! in_array(strtolower($host), ['localhost', '127.0.0.1', '::1'], true)) {
+                $remoteUrl = rtrim((string) $publicBaseUrl, '/') . '/' . ltrim($imagePath, '/');
+                try {
+                    $res = Http::timeout(4)->connectTimeout(2)->get($remoteUrl);
+                    if ($res->successful() && $res->body() !== '') {
+                        return [
+                            'contents' => $res->body(),
+                            'filename' => basename($imagePath),
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning("Retrain: remote fallback fetch failed for scan #{$scan->id}: {$e->getMessage()}");
                 }
-            } catch (\Throwable $e) {
-                Log::warning("Retrain: remote fallback fetch failed for scan #{$scan->id}: {$e->getMessage()}");
+            }
+        }
+
+        // 4. Fallback: direct storage_path check on local disk if public disk path differs
+        $localPath = storage_path('app/public/' . ltrim($imagePath, '/'));
+        if (file_exists($localPath)) {
+            $contents = @file_get_contents($localPath);
+            if ($contents !== false && $contents !== '') {
+                return [
+                    'contents' => $contents,
+                    'filename' => basename($imagePath),
+                ];
+            }
+        }
+
+        // 5. Fallback: try direct HTTP GET if $scan->image_url is a full remote URL (non-localhost)
+        if ($scan->image_url && (str_starts_with($scan->image_url, 'http://') || str_starts_with($scan->image_url, 'https://'))) {
+            $host = parse_url($scan->image_url, PHP_URL_HOST);
+            if ($host && ! in_array(strtolower($host), ['localhost', '127.0.0.1', '::1'], true)) {
+                try {
+                    $res = Http::timeout(4)->connectTimeout(2)->get($scan->image_url);
+                    if ($res->successful() && $res->body() !== '') {
+                        return [
+                            'contents' => $res->body(),
+                            'filename' => basename(parse_url($scan->image_url, PHP_URL_PATH) ?: $imagePath),
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    // silent
+                }
             }
         }
 
         Log::warning("Retrain: image file missing for scan #{$scan->id}: {$imagePath}");
         return null;
+    }
+
+    /**
+     * Compute 64-bit difference hash (dHash) for an image.
+     */
+    private function computeDHash(?string $bytes): ?string
+    {
+        if (! extension_loaded('gd') || ! $bytes) {
+            return null;
+        }
+
+        $img = @imagecreatefromstring($bytes);
+        if (! $img) {
+            return null;
+        }
+
+        $w = 9;
+        $h = 8;
+        $small = imagecreatetruecolor($w, $h);
+        imagecopyresampled($small, $img, 0, 0, 0, 0, $w, $h, imagesx($img), imagesy($img));
+        imagefilter($small, IMG_FILTER_GRAYSCALE);
+
+        $bits = '';
+        for ($y = 0; $y < $h; $y++) {
+            for ($x = 0; $x < $w - 1; $x++) {
+                $left  = imagecolorat($small, $x, $y) & 0xFF;
+                $right = imagecolorat($small, $x + 1, $y) & 0xFF;
+                $bits .= ($left > $right) ? '1' : '0';
+            }
+        }
+
+        imagedestroy($img);
+        imagedestroy($small);
+
+        return $bits;
+    }
+
+    /**
+     * Calculate Hamming distance between two 64-bit strings.
+     */
+    private function hammingDistance(string $b1, string $b2): int
+    {
+        $len1 = strlen($b1);
+        $len2 = strlen($b2);
+        if ($len1 !== 64 || $len2 !== 64) {
+            return 64;
+        }
+        $dist = 0;
+        for ($i = 0; $i < 64; $i++) {
+            if ($b1[$i] !== $b2[$i]) {
+                $dist++;
+            }
+        }
+        return $dist;
+    }
+
+    /**
+     * Compute/retrieve cached image fingerprints (MD5, SHA1, dHash, size).
+     */
+    private function computeScanImageHashes(Scan $scan): ?array
+    {
+        $cacheKey = "scan_hashes_{$scan->id}_" . ($scan->updated_at?->timestamp ?? 0);
+        $cached = Cache::remember($cacheKey, now()->addDays(7), function () use ($scan) {
+            $data = $this->readScanImageContents($scan);
+            if (! $data || empty($data['contents'])) {
+                return ['missing' => true];
+            }
+            $bytes = $data['contents'];
+            return [
+                'md5'   => md5($bytes),
+                'sha1'  => sha1($bytes),
+                'size'  => strlen($bytes),
+                'dhash' => $this->computeDHash($bytes),
+            ];
+        });
+
+        return (is_array($cached) && empty($cached['missing'])) ? $cached : null;
     }
 
     /**
@@ -211,6 +321,263 @@ class AdminRetrainController extends Controller
                 ? '1 scan image restored to the training queue.'
                 : "{$restored} scan images restored to the training queue.",
             'restored' => $restored,
+        ]);
+    }
+
+    /**
+     * GET /api/admin/retrain/duplicates
+     *
+     * Reviews consented candidate scan images, computes exact (MD5) and perceptual (dHash)
+     * image fingerprints, and clusters duplicates into sets. Also identifies label conflicts
+     * (the same image classified as both edible and poisonous).
+     */
+    public function duplicates(Request $request)
+    {
+        $scope = $request->query('scope', 'ready'); // 'ready' (default) | 'all'
+
+        $query = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
+            ->whereIn('result_classification', ['edible', 'poisonous'])
+            ->whereNotNull('image_path')
+            ->with('user:id,name');
+
+        if ($scope === 'ready') {
+            $query->whereNull('retrained_at');
+        }
+
+        $scans = $query->orderBy('created_at', 'asc')->get();
+
+        if ($scans->isEmpty()) {
+            return response()->json([
+                'total_scans_analyzed'     => 0,
+                'duplicate_groups_count'   => 0,
+                'redundant_scans_count'    => 0,
+                'conflict_groups_count'    => 0,
+                'groups'                   => [],
+                'recommended_unselect_ids' => [],
+                'duplicate_scan_ids_map'   => new \stdClass(),
+            ]);
+        }
+
+        // 1. Compute/retrieve fingerprints for each scan
+        $fingerprints = [];
+        $validScans   = [];
+
+        foreach ($scans as $scan) {
+            $hashData = $this->computeScanImageHashes($scan);
+            if (! $hashData) {
+                continue;
+            }
+            $validScans[$scan->id]   = $scan;
+            $fingerprints[$scan->id] = $hashData;
+        }
+
+        if (count($validScans) < 2) {
+            return response()->json([
+                'total_scans_analyzed'     => count($validScans),
+                'duplicate_groups_count'   => 0,
+                'redundant_scans_count'    => 0,
+                'conflict_groups_count'    => 0,
+                'groups'                   => [],
+                'recommended_unselect_ids' => [],
+                'duplicate_scan_ids_map'   => new \stdClass(),
+            ]);
+        }
+
+        // 2. Disjoint-Set / Union-Find clustering
+        $parent = [];
+        $pairwiseMatches = [];
+
+        foreach ($validScans as $id => $_) {
+            $parent[$id] = $id;
+        }
+
+        $find = function ($i) use (&$find, &$parent) {
+            if ($parent[$i] === $i) {
+                return $i;
+            }
+            return $parent[$i] = $find($parent[$i]);
+        };
+
+        $union = function ($i, $j) use (&$find, &$parent) {
+            $rootI = $find($i);
+            $rootJ = $find($j);
+            if ($rootI !== $rootJ) {
+                $parent[$rootI] = $rootJ;
+            }
+        };
+
+        $scanIds = array_keys($validScans);
+        $count   = count($scanIds);
+
+        for ($i = 0; $i < $count; $i++) {
+            $id1 = $scanIds[$i];
+            $fp1 = $fingerprints[$id1];
+
+            for ($j = $i + 1; $j < $count; $j++) {
+                $id2 = $scanIds[$j];
+                $fp2 = $fingerprints[$id2];
+
+                $isExact  = ($fp1['md5'] === $fp2['md5']);
+                $distance = 64;
+
+                if (! $isExact && ! empty($fp1['dhash']) && ! empty($fp2['dhash'])) {
+                    $distance = $this->hammingDistance($fp1['dhash'], $fp2['dhash']);
+                }
+
+                if ($isExact) {
+                    $union($id1, $id2);
+                    $pairKey = min($id1, $id2) . '_' . max($id1, $id2);
+                    $pairwiseMatches[$pairKey] = ['type' => 'exact', 'distance' => 0];
+                } elseif ($distance <= 5) {
+                    $union($id1, $id2);
+                    $pairKey = min($id1, $id2) . '_' . max($id1, $id2);
+                    $pairwiseMatches[$pairKey] = ['type' => 'perceptual', 'distance' => $distance];
+                }
+            }
+        }
+
+        // 3. Collect groups
+        $rawGroups = [];
+        foreach ($scanIds as $id) {
+            $root = $find($id);
+            $rawGroups[$root][] = $id;
+        }
+
+        $groups                 = [];
+        $recommendedUnselectIds = [];
+        $duplicateScanIdsMap    = [];
+        $conflictGroupsCount    = 0;
+        $groupIdCounter         = 1;
+
+        foreach ($rawGroups as $root => $memberIds) {
+            if (count($memberIds) < 2) {
+                continue;
+            }
+
+            // Retrieve and sort member scans:
+            // Prefer: 1. Highest confidence_level desc, 2. Oldest created_at asc
+            $memberScans = [];
+            foreach ($memberIds as $mId) {
+                $memberScans[] = $validScans[$mId];
+            }
+
+            usort($memberScans, function ($a, $b) {
+                if ($b->confidence_level !== $a->confidence_level) {
+                    return $b->confidence_level <=> $a->confidence_level;
+                }
+                return $a->created_at <=> $b->created_at;
+            });
+
+            // Determine if exact or perceptual
+            $hasPerceptual = false;
+            $maxDistance   = 0;
+            for ($x = 0; $x < count($memberIds); $x++) {
+                for ($y = $x + 1; $y < count($memberIds); $y++) {
+                    $pKey = min($memberIds[$x], $memberIds[$y]) . '_' . max($memberIds[$x], $memberIds[$y]);
+                    if (isset($pairwiseMatches[$pKey])) {
+                        if ($pairwiseMatches[$pKey]['type'] === 'perceptual') {
+                            $hasPerceptual = true;
+                            $maxDistance   = max($maxDistance, $pairwiseMatches[$pKey]['distance']);
+                        }
+                    }
+                }
+            }
+
+            $matchType  = $hasPerceptual ? 'perceptual' : 'exact';
+            $similarity = $hasPerceptual
+                ? round((1 - ($maxDistance / 64)) * 100, 1)
+                : 100;
+
+            // Check for classification conflicts
+            $classifications = array_unique(array_map(fn ($s) => $s->result_classification, $memberScans));
+            $hasConflict     = count($classifications) > 1;
+            if ($hasConflict) {
+                $conflictGroupsCount++;
+                $groupClass = 'conflict';
+            } else {
+                $groupClass = reset($classifications);
+            }
+
+            $primaryScan      = $memberScans[0];
+            $groupUnselectIds = [];
+            $formattedScans   = [];
+
+            foreach ($memberScans as $idx => $s) {
+                $isPrimary = ($idx === 0);
+                if (! $isPrimary) {
+                    $groupUnselectIds[]       = $s->id;
+                    $recommendedUnselectIds[] = $s->id;
+                }
+
+                $duplicateScanIdsMap[$s->id] = [
+                    'group_id'     => $groupIdCounter,
+                    'is_primary'   => $isPrimary,
+                    'match_type'   => $matchType,
+                    'similarity'   => $similarity,
+                    'has_conflict' => $hasConflict,
+                ];
+
+                $formattedScans[] = [
+                    'id'             => $s->id,
+                    'is_primary'     => $isPrimary,
+                    'image_url'      => $s->image_url,
+                    'image_path'     => $s->image_path,
+                    'result_name'    => $s->result_name,
+                    'confidence'     => round($s->confidence_level * 100, 1),
+                    'classification' => $s->result_classification,
+                    'user'           => $s->user?->name ?? 'Unknown',
+                    'scanned_at'     => $s->created_at?->toDateString(),
+                    'retrained_at'   => $s->retrained_at?->toDateString(),
+                    'file_size'      => $fingerprints[$s->id]['size'] ?? null,
+                ];
+            }
+
+            $groups[] = [
+                'group_id'                 => $groupIdCounter++,
+                'match_type'               => $matchType,
+                'similarity'               => $similarity,
+                'has_conflict'             => $hasConflict,
+                'classification'           => $groupClass,
+                'total_count'              => count($memberScans),
+                'primary_scan_id'          => $primaryScan->id,
+                'recommended_unselect_ids' => $groupUnselectIds,
+                'scans'                    => $formattedScans,
+            ];
+        }
+
+        $redundantCount = count($recommendedUnselectIds);
+
+        return response()->json([
+            'total_scans_analyzed'     => count($validScans),
+            'duplicate_groups_count'   => count($groups),
+            'redundant_scans_count'    => $redundantCount,
+            'conflict_groups_count'    => $conflictGroupsCount,
+            'groups'                   => $groups,
+            'recommended_unselect_ids' => $recommendedUnselectIds,
+            'duplicate_scan_ids_map'   => (object) $duplicateScanIdsMap,
+        ]);
+    }
+
+    /**
+     * POST /api/admin/retrain/exclude
+     *
+     * Mark selected duplicate or unwanted scans as excluded/retrained
+     * so they are moved out of the active training queue without being trained.
+     */
+    public function exclude(Request $request)
+    {
+        $data = $request->validate([
+            'scan_ids'   => 'required|array|min:1',
+            'scan_ids.*' => 'integer',
+        ]);
+
+        $count = Scan::whereIn('id', $data['scan_ids'])
+            ->whereNull('retrained_at')
+            ->update(['retrained_at' => now()]);
+
+        return response()->json([
+            'message'  => "{$count} scan image(s) excluded from the active training queue.",
+            'excluded' => $count,
         ]);
     }
 
