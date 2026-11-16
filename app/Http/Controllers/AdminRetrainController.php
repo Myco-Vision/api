@@ -57,17 +57,20 @@ class AdminRetrainController extends Controller
 
         // 1. Direct HTTP(S) URL stored in image_path
         if (str_starts_with($imagePath, 'http://') || str_starts_with($imagePath, 'https://')) {
-            try {
-                $res = Http::timeout(15)->get($imagePath);
-                if ($res->successful() && $res->body() !== '') {
-                    $pathPart = parse_url($imagePath, PHP_URL_PATH) ?: '';
-                    return [
-                        'contents' => $res->body(),
-                        'filename' => basename($pathPart) ?: "scan_{$scan->id}.jpg",
-                    ];
+            $host = parse_url($imagePath, PHP_URL_HOST);
+            if ($host && ! in_array(strtolower($host), ['localhost', '127.0.0.1', '::1'], true)) {
+                try {
+                    $res = Http::timeout(4)->connectTimeout(2)->get($imagePath);
+                    if ($res->successful() && $res->body() !== '') {
+                        $pathPart = parse_url($imagePath, PHP_URL_PATH) ?: '';
+                        return [
+                            'contents' => $res->body(),
+                            'filename' => basename($pathPart) ?: "scan_{$scan->id}.jpg",
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning("Retrain: HTTP fetch failed for scan #{$scan->id}: {$e->getMessage()}");
                 }
-            } catch (\Throwable $e) {
-                Log::warning("Retrain: HTTP fetch failed for scan #{$scan->id}: {$e->getMessage()}");
             }
 
             return null;
