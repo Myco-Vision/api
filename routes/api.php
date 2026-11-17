@@ -1,12 +1,14 @@
 <?php
 
 use App\Http\Controllers\AccountManagementController;
+use App\Http\Controllers\AdminAnnotationController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminRetrainController;
 use App\Http\Controllers\AdminRewardController;
 use App\Http\Controllers\AdminSubscriptionController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\GoogleAuthController;
+use App\Http\Controllers\MycoDexController;
 use App\Http\Controllers\RefundController;
 use App\Http\Controllers\RewardController;
 use App\Http\Controllers\ScanController;
@@ -58,6 +60,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Rewards
     Route::get('/rewards', [RewardController::class, 'index']);
 
+    // MycoDex & Gamified Rewards
+    Route::get('/user/mycodex',              [MycoDexController::class, 'index']);
+    Route::post('/user/redeem-subscription', [MycoDexController::class, 'redeemSubscription']);
+
     // Refunds (own)
     Route::get('/refunds',                    [RefundController::class, 'mine']);
     Route::post('/refunds',                   [RefundController::class, 'store'])->middleware('throttle:10,1');
@@ -101,6 +107,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/retrain/restore',   [AdminRetrainController::class, 'restore']);
         Route::post('/retrain/exclude',   [AdminRetrainController::class, 'exclude']);
         Route::post('/retrain/refresh',   [AdminRetrainController::class, 'refreshMl']);
+
+        // HITL Annotation Queue & Dataset Export
+        Route::get('/annotations/pending',       [AdminAnnotationController::class, 'pending']);
+        Route::get('/annotations/approved',      [AdminAnnotationController::class, 'approved']);
+        Route::post('/annotations/{id}/approve', [AdminAnnotationController::class, 'approve']);
+        Route::post('/annotations/{id}/reject',  [AdminAnnotationController::class, 'reject']);
+        Route::get('/annotations/export',        [AdminAnnotationController::class, 'export']);
 
         // Reward System Controls
         Route::get('/rewards',          [AdminRewardController::class, 'index']);

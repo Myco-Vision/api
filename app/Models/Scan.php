@@ -63,4 +63,9 @@ class Scan extends Model
     {
         return $this->belongsTo(Species::class);
     }
+
+    public function contribution()
+    {
+        return $this->hasOne(ScanContribution::class);
+    }
 }

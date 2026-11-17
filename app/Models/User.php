@@ -32,6 +32,8 @@ class User extends Authenticatable implements MustVerifyEmail
         'allow_data_training',
         'data_training_consented_at',
         'reward_points',
+        'pending_points',
+        'verified_points',
     ];
 
     protected $hidden = [
@@ -53,6 +55,8 @@ class User extends Authenticatable implements MustVerifyEmail
             'password'                 => 'hashed',
             'needs_profile_completion' => 'boolean',
             'reward_points'            => 'integer',
+            'pending_points'           => 'integer',
+            'verified_points'          => 'integer',
         ];
     }
 
@@ -84,6 +88,16 @@ class User extends Authenticatable implements MustVerifyEmail
     public function pointTransactions()
     {
         return $this->hasMany(PointTransaction::class);
+    }
+
+    public function mycodex()
+    {
+        return $this->hasMany(UserMycodex::class);
+    }
+
+    public function scanContributions()
+    {
+        return $this->hasMany(ScanContribution::class);
     }
 
     public function activeSubscription()

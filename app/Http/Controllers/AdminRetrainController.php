@@ -230,7 +230,12 @@ class AdminRetrainController extends Controller
     {
         $query = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
             ->whereIn('result_classification', ['edible', 'poisonous'])
-            ->whereNotNull('image_path');
+            ->whereNotNull('image_path')
+            ->where(function ($q) {
+                // Crowdsourced scans with contributions must be explicitly 'approved' by an admin
+                $q->whereHas('contribution', fn ($c) => $c->where('annotation_status', 'approved'))
+                  ->orWhereDoesntHave('contribution');
+            });
 
         return $alreadyRetrained
             ? $query->whereNotNull('retrained_at')
@@ -611,7 +616,7 @@ class AdminRetrainController extends Controller
             $baseQuery->whereIn('id', $allowedIds);
         }
 
-        $scans = $baseQuery->get();
+        $scans = $baseQuery->with('contribution')->get();
 
         if ($scans->isEmpty()) {
             return response()->json([
@@ -630,6 +635,21 @@ class AdminRetrainController extends Controller
                 continue;
             }
 
+            // Read from human-verified species if available, eliminating label noise
+            $targetClassification = $scan->result_classification;
+            $verifiedSpecies = $scan->contribution?->verified_species;
+
+            if ($verifiedSpecies) {
+                $matchedClass = \App\Models\Species::where('scientific_name', $verifiedSpecies)
+                    ->orWhere('name', $verifiedSpecies)
+                    ->value('classification');
+                if ($matchedClass && in_array(strtolower($matchedClass), ['edible', 'poisonous'], true)) {
+                    $targetClassification = strtolower($matchedClass);
+                } elseif (in_array(strtolower($verifiedSpecies), ['edible', 'poisonous'], true)) {
+                    $targetClassification = strtolower($verifiedSpecies);
+                }
+            }
+
             $sentScanIds[] = $scan->id;
             $multipart[] = [
                 'name'     => 'images[]',
@@ -638,10 +658,18 @@ class AdminRetrainController extends Controller
             ];
             $multipart[] = [
                 'name'     => 'labels[]',
-                'contents' => $scan->result_classification,
+                'contents' => $targetClassification,
+            ];
+            $multipart[] = [
+                'name'     => 'annotation_statuses[]',
+                'contents' => $scan->contribution?->annotation_status ?? 'approved',
+            ];
+            $multipart[] = [
+                'name'     => 'verified_species[]',
+                'contents' => $verifiedSpecies ?? '',
             ];
 
-            if ($scan->result_classification === 'edible') {
+            if ($targetClassification === 'edible') {
                 $edibleCount++;
             } else {
                 $poisonousCount++;

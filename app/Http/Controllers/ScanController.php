@@ -183,8 +183,11 @@ class ScanController extends Controller
         ]);
 
         $rewardResult = (new \App\Services\RewardService())->awardForScan($user, $scan);
-        $scanPayload = $scan->load('species')->toArray();
+        $mycodexResult = (new \App\Services\MycoDexService())->handleScanSubmission($user, $scan, $mlData);
+
+        $scanPayload = $scan->load(['species', 'contribution'])->toArray();
         $scanPayload['reward'] = $rewardResult;
+        $scanPayload['mycodex_reward'] = $mycodexResult;
 
         return response()->json($scanPayload, 201);
     }
