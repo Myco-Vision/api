@@ -832,7 +832,7 @@ class AdminRetrainController extends Controller
         $scansUpdated = false;
 
         try {
-            $response = Http::timeout(10)
+            $response = Http::timeout(30)
                 ->withHeaders(['X-Retrain-Key' => $this->retrainKey()])
                 ->get($this->mlUrl() . '/retrain/status');
 
