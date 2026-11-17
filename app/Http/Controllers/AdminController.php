@@ -245,8 +245,8 @@ class AdminController extends Controller
         $confTotal = max(1, $conf90 + $conf70 + $conf50 + $confLow);
 
         // Top users by scan count
-        $topUsers = User::withCount(['scans' => fn ($q) => $q->where('created_at', '>=', $startDate)])
-            ->having('scans_count', '>', 0)
+        $topUsers = User::whereHas('scans', fn ($q) => $q->where('created_at', '>=', $startDate))
+            ->withCount(['scans' => fn ($q) => $q->where('created_at', '>=', $startDate)])
             ->orderByDesc('scans_count')
             ->take(5)
             ->get()
