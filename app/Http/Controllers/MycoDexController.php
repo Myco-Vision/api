@@ -48,3 +48,4 @@ class MycoDexController extends Controller
         }
     }
 }
+

@@ -299,3 +299,4 @@ class AdminAnnotationController extends Controller
         ])->deleteFileAfterSend(true);
     }
 }
+
