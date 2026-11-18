@@ -121,10 +121,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/rewards/adjust',  [AdminRewardController::class, 'adjust']);
 
         // Species management (read + write)
-        Route::get('/species',              [SpeciesController::class, 'index']);
-        Route::post('/species',             [SpeciesController::class, 'store']);
-        Route::put('/species/{species}',    [SpeciesController::class, 'update']);
-        Route::delete('/species/{species}', [SpeciesController::class, 'destroy']);
+        Route::get('/species',                              [SpeciesController::class, 'index']);
+        Route::post('/species',                             [SpeciesController::class, 'store']);
+        Route::match(['put', 'post'], '/species/{species}', [SpeciesController::class, 'update']);
+        Route::delete('/species/{species}',                 [SpeciesController::class, 'destroy']);
 
         // Subscription management
         Route::get('/subscriptions',                              [AdminSubscriptionController::class, 'index']);

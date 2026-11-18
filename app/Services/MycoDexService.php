@@ -68,8 +68,15 @@ class MycoDexService
             $isBorderline = ($confScore >= 0.60 && $confScore < 0.80);
             $basePoints = $isBorderline ? 10 : 2;
 
-            // New species discovery bonus: +5
-            $discoveryBonus = $isNewSpecies ? 5 : 0;
+            // New species discovery bonus: custom unlock_points configured on specimen or default +5
+            $discoveryBonus = 0;
+            if ($isNewSpecies) {
+                $cleanSpecimenName = trim($speciesName);
+                $specimen = Species::whereRaw('LOWER(name) = ?', [strtolower($cleanSpecimenName)])
+                    ->orWhereRaw('LOWER(scientific_name) = ?', [strtolower($cleanSpecimenName)])
+                    ->first();
+                $discoveryBonus = (int) ($specimen?->unlock_points ?: 5);
+            }
             $totalPoints = $basePoints + $discoveryBonus;
 
             // 6. Award to pending_points (Anti-cheat: remains pending until admin approves)
@@ -117,8 +124,11 @@ class MycoDexService
             ->get()
             ->keyBy(fn ($item) => strtolower(trim($item->species_name)));
 
-        // Get full catalog of supported mushroom species
-        $catalogSpecies = Species::orderBy('name')->get();
+        // Get full catalog of supported mushroom species active in MycoDex
+        $catalogSpecies = Species::where('is_active_mycodex', true)
+            ->orWhereNull('is_active_mycodex')
+            ->orderBy('name')
+            ->get();
 
         $speciesGrid = $catalogSpecies->map(function ($species) use ($mycodexEntries) {
             $keySci = strtolower(trim((string) ($species->scientific_name ?? '')));
@@ -134,6 +144,9 @@ class MycoDexService
                 'classification'   => $species->classification,
                 'description'      => $species->description,
                 'habitat'          => $species->habitat,
+                'rarity'           => $species->rarity ?: 'common',
+                'unlock_points'    => (int) ($species->unlock_points ?: 5),
+                'unlock_hint'      => $species->unlock_hint,
                 'is_discovered'    => $isDiscovered,
                 'scan_count'       => $isDiscovered ? (int) $entry->scan_count : 0,
                 'first_scanned_at' => $isDiscovered ? $entry->first_scanned_at?->toIso8601String() : null,

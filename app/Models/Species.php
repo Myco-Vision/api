@@ -16,6 +16,15 @@ class Species extends Model
         'description',
         'image_path',
         'habitat',
+        'rarity',
+        'unlock_points',
+        'unlock_hint',
+        'is_active_mycodex',
+    ];
+
+    protected $casts = [
+        'unlock_points'     => 'integer',
+        'is_active_mycodex' => 'boolean',
     ];
 
     protected $appends = [
