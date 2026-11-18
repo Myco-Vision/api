@@ -133,6 +133,7 @@ class SubscriptionController extends Controller
                 'latest_specimen_id'   => (int) (\App\Models\Species::where('is_active_mycodex', true)->max('id') ?? 0),
                 'latest_specimen_name' => \App\Models\Species::where('is_active_mycodex', true)->latest('id')->value('name'),
                 'total_species'        => (int) \App\Models\Species::where('is_active_mycodex', true)->count(),
+                'new_specimens_count'  => (int) (\App\Models\Species::where('is_active_mycodex', true)->where('created_at', '>=', now()->subDays(7))->count()),
             ],
         ]);
     }
