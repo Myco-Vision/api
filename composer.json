@@ -51,6 +51,12 @@
             "@php artisan config:clear --ansi",
             "@php artisan test"
         ],
+        "env:local": [
+            "./switch-env.sh local"
+        ],
+        "env:cloud": [
+            "./switch-env.sh cloud"
+        ],
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
             "@php artisan package:discover --ansi"

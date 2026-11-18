@@ -859,6 +859,17 @@ class AdminRetrainController extends Controller
     {
         $scansUpdated = false;
 
+        // Debounce / cache idle status for 45s when no retrain run is active to protect Modal credits
+        $force = (bool) request()->query('force', false);
+        $hasActiveRun = Schema::hasTable('retrain_runs') && RetrainRun::where('status', 'running')->exists();
+
+        if (! $force && ! $hasActiveRun) {
+            $cached = Cache::get('retrain:ml_idle_status');
+            if ($cached && is_array($cached)) {
+                return response()->json($cached);
+            }
+        }
+
         try {
             $response = Http::timeout(30)
                 ->withHeaders(['X-Retrain-Key' => $this->retrainKey()])
@@ -947,11 +958,17 @@ class AdminRetrainController extends Controller
                 }
             }
 
-            return response()->json([
+            $payload = [
                 'current'       => $current,
                 'history'       => $this->buildHistory($flaskHistory),
                 'scans_updated' => $scansUpdated,
-            ], $response->status());
+            ];
+
+            if ($state === 'idle' && ! $hasActiveRun) {
+                Cache::put('retrain:ml_idle_status', $payload, 45);
+            }
+
+            return response()->json($payload, $response->status());
 
         } catch (\Exception $e) {
             Log::error('Retrain status check failed', ['msg' => $e->getMessage()]);

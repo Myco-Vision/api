@@ -4,7 +4,9 @@
     "type": "module",
     "scripts": {
         "build": "vite build",
-        "dev": "vite"
+        "dev": "vite",
+        "env:local": "./switch-env.sh local",
+        "env:cloud": "./switch-env.sh cloud"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

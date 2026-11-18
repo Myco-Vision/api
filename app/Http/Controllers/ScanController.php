@@ -225,6 +225,11 @@ class ScanController extends Controller
             return response()->json(['warmed' => false, 'status' => 'unconfigured'], 503);
         }
 
+        // Modal scales on-demand in seconds; skip artificial warmup to protect Modal credits
+        if (str_contains($mlApiUrl, 'modal.run')) {
+            return response()->json(['warmed' => true, 'status' => 'ready'], 200);
+        }
+
         try {
             $response = \Illuminate\Support\Facades\Http::timeout(25)->get("{$mlApiUrl}/health", ['warm' => 1]);
             $data = $response->json();
