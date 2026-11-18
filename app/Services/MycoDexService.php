@@ -147,6 +147,9 @@ class MycoDexService
                 'rarity'           => $species->rarity ?: 'common',
                 'unlock_points'    => (int) ($species->unlock_points ?: 5),
                 'unlock_hint'      => $species->unlock_hint,
+                'created_at'       => $species->created_at?->toIso8601String(),
+                'is_new_target'    => $species->created_at ? $species->created_at->isAfter(now()->subDays(7)) : false,
+                'reference_image_url' => $species->image_url,
                 'is_discovered'    => $isDiscovered,
                 'scan_count'       => $isDiscovered ? (int) $entry->scan_count : 0,
                 'first_scanned_at' => $isDiscovered ? $entry->first_scanned_at?->toIso8601String() : null,
@@ -184,6 +187,8 @@ class MycoDexService
 
         $activeSub = $user->activeSubscription;
 
+        $latestActive = $catalogSpecies->sortByDesc('id')->first();
+
         return [
             'verified_points'  => $verifiedPoints,
             'pending_points'   => $pendingPoints,
@@ -195,6 +200,15 @@ class MycoDexService
                 'tier'          => $user->subscription_tier,
                 'expires_at'    => $activeSub?->expires_at?->toIso8601String(),
             ],
+            'latest_specimen'  => $latestActive ? [
+                'id'              => $latestActive->id,
+                'common_name'     => $latestActive->name,
+                'scientific_name' => $latestActive->scientific_name,
+                'rarity'          => $latestActive->rarity ?: 'common',
+                'unlock_points'   => (int) ($latestActive->unlock_points ?: 5),
+                'unlock_hint'     => $latestActive->unlock_hint,
+                'created_at'      => $latestActive->created_at?->toIso8601String(),
+            ] : null,
             'species_discovered_count' => $mycodexEntries->count(),
             'total_species_count'      => $speciesGrid->count(),
             'species_grid'             => $speciesGrid->values(),
