@@ -831,9 +831,11 @@ class AdminRetrainController extends Controller
             return $dbRuns;
         }
 
+        // Check against ALL existing database runs (active and archived) to prevent re-importing archived runs
+        $allDbRuns = RetrainRun::select(['id', 'started_at', 'status', 'is_archived'])->get();
         $knownTimestamps = array_filter(array_map(
-            fn ($item) => isset($item['started_at']) ? strtotime((string) $item['started_at']) : null,
-            $dbRuns
+            fn ($item) => $item->started_at ? $item->started_at->timestamp : null,
+            $allDbRuns->all()
         ));
 
         foreach ($flaskHistory as $entry) {
@@ -849,9 +851,18 @@ class AdminRetrainController extends Controller
                 }
             }
             if (! $matchesExisting) {
+                // If a Flask log entry says "running" but started over 15 minutes ago, it's stale/interrupted
+                $entryStatus = $entry['status'] ?? 'done';
+                if ($entryStatus === 'running' && $ts !== false && $ts < (time() - 900)) {
+                    $entryStatus = 'failed';
+                    $entryError  = 'Retraining timed out or was interrupted.';
+                } else {
+                    $entryError = $entry['error'] ?? null;
+                }
+
                 try {
                     $newRun = RetrainRun::create([
-                        'status'          => $entry['status'] ?? 'done',
+                        'status'          => $entryStatus,
                         'train_accuracy'  => $entry['train_accuracy'] ?? null,
                         'val_accuracy'    => $entry['val_accuracy'] ?? null,
                         'total_images'    => $entry['total_images'] ?? null,
@@ -859,6 +870,7 @@ class AdminRetrainController extends Controller
                         'total_poisonous' => $entry['total_poisonous'] ?? null,
                         'started_at'      => ! empty($entry['started_at']) ? Carbon::parse($entry['started_at']) : null,
                         'finished_at'     => ! empty($entry['finished_at']) ? Carbon::parse($entry['finished_at']) : null,
+                        'error'           => $entryError,
                         'is_archived'     => false,
                     ]);
                     $dbRuns[] = $newRun->toHistoryArray();
@@ -918,6 +930,18 @@ class AdminRetrainController extends Controller
             $state        = $current['state'] ?? 'idle';
 
             if (Schema::hasTable('retrain_runs')) {
+                // Auto-expire any abandoned runs that have been "running" for over 15 minutes
+                RetrainRun::where('status', 'running')
+                    ->where(function ($q) {
+                        $q->where('started_at', '<', now()->subMinutes(15))
+                          ->orWhere('created_at', '<', now()->subMinutes(30));
+                    })
+                    ->update([
+                        'status'      => 'failed',
+                        'finished_at' => now(),
+                        'error'       => 'Retraining timed out or was interrupted.',
+                    ]);
+
                 $runningRun = RetrainRun::where('status', 'running')->latest('id')->first();
                 if (! $runningRun) {
                     // Check if there is an unfinalized run from the last 30 minutes
