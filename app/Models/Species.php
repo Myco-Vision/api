@@ -20,12 +20,26 @@ class Species extends Model
         'unlock_points',
         'unlock_hint',
         'is_active_mycodex',
+        'archived_at',
     ];
 
     protected $casts = [
         'unlock_points'     => 'integer',
         'is_active_mycodex' => 'boolean',
+        'archived_at'       => 'datetime',
     ];
+
+    public function scopeActive($query)
+    {
+        return $query->where(function ($q) {
+            $q->where('is_active_mycodex', true)->orWhereNull('is_active_mycodex');
+        });
+    }
+
+    public function scopeArchived($query)
+    {
+        return $query->where('is_active_mycodex', false);
+    }
 
     protected $appends = [
         'image_url',

@@ -126,6 +126,11 @@ Route::middleware('auth:sanctum')->group(function () {
         // Species management (read + write)
         Route::get('/species',                              [SpeciesController::class, 'index']);
         Route::post('/species',                             [SpeciesController::class, 'store']);
+        Route::put('/species/{species}/archive',            [SpeciesController::class, 'archive']);
+        Route::put('/species/{species}/restore',            [SpeciesController::class, 'restore']);
+        Route::post('/species/bulk-archive',                [SpeciesController::class, 'bulkArchive']);
+        Route::post('/species/bulk-restore',                [SpeciesController::class, 'bulkRestore']);
+        Route::post('/species/bulk-delete',                 [SpeciesController::class, 'bulkDelete']);
         Route::match(['put', 'post'], '/species/{species}', [SpeciesController::class, 'update']);
         Route::delete('/species/{species}',                 [SpeciesController::class, 'destroy']);
 
