@@ -20,6 +20,8 @@ class RetrainRun extends Model
         'error',
         'scan_ids',
         'scans_marked_retrained',
+        'is_archived',
+        'archived_at',
         'started_at',
         'finished_at',
     ];
@@ -35,9 +37,21 @@ class RetrainRun extends Model
         'val_accuracy'           => 'float',
         'scan_ids'               => 'array',
         'scans_marked_retrained' => 'boolean',
+        'is_archived'            => 'boolean',
+        'archived_at'            => 'datetime',
         'started_at'             => 'datetime',
         'finished_at'            => 'datetime',
     ];
+
+    public function scopeActive($query)
+    {
+        return $query->where('is_archived', false);
+    }
+
+    public function scopeArchived($query)
+    {
+        return $query->where('is_archived', true);
+    }
 
     public function triggeredBy()
     {
@@ -72,6 +86,8 @@ class RetrainRun extends Model
             'error'                  => $this->error,
             'scan_ids_count'         => is_array($this->scan_ids) ? count($this->scan_ids) : 0,
             'scans_marked_retrained' => $this->scans_marked_retrained,
+            'is_archived'            => (bool) $this->is_archived,
+            'archived_at'            => $this->archived_at?->toIso8601ZuluString(),
         ];
     }
 }

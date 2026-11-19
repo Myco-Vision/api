@@ -812,13 +812,24 @@ class AdminRetrainController extends Controller
     /**
      * Merge persisted PostgreSQL history with any older Flask log entries.
      */
-    private function buildHistory(array $flaskHistory): array
+    private function buildHistory(array $flaskHistory, bool $archived = false): array
     {
         if (! Schema::hasTable('retrain_runs')) {
-            return $flaskHistory;
+            return $archived ? [] : $flaskHistory;
         }
 
-        $dbRuns = RetrainRun::with('triggeredBy:id,name')->latest('id')->take(20)->get()->map->toHistoryArray()->all();
+        $query = RetrainRun::with('triggeredBy:id,name')->latest('id');
+        if (Schema::hasColumn('retrain_runs', 'is_archived')) {
+            $query = $archived ? $query->archived() : $query->active();
+        } elseif ($archived) {
+            return [];
+        }
+
+        $dbRuns = $query->take(50)->get()->map->toHistoryArray()->all();
+
+        if ($archived) {
+            return $dbRuns;
+        }
 
         $knownTimestamps = array_filter(array_map(
             fn ($item) => isset($item['started_at']) ? strtotime((string) $item['started_at']) : null,
@@ -838,7 +849,22 @@ class AdminRetrainController extends Controller
                 }
             }
             if (! $matchesExisting) {
-                $dbRuns[] = $entry;
+                try {
+                    $newRun = RetrainRun::create([
+                        'status'          => $entry['status'] ?? 'done',
+                        'train_accuracy'  => $entry['train_accuracy'] ?? null,
+                        'val_accuracy'    => $entry['val_accuracy'] ?? null,
+                        'total_images'    => $entry['total_images'] ?? null,
+                        'total_edible'    => $entry['total_edible'] ?? null,
+                        'total_poisonous' => $entry['total_poisonous'] ?? null,
+                        'started_at'      => ! empty($entry['started_at']) ? Carbon::parse($entry['started_at']) : null,
+                        'finished_at'     => ! empty($entry['finished_at']) ? Carbon::parse($entry['finished_at']) : null,
+                        'is_archived'     => false,
+                    ]);
+                    $dbRuns[] = $newRun->toHistoryArray();
+                } catch (\Throwable) {
+                    $dbRuns[] = $entry;
+                }
             }
         }
 
@@ -846,7 +872,7 @@ class AdminRetrainController extends Controller
             return strcmp((string) ($b['started_at'] ?? ''), (string) ($a['started_at'] ?? ''));
         });
 
-        return array_slice($dbRuns, 0, 20);
+        return array_slice($dbRuns, 0, 50);
     }
 
     /**
@@ -959,9 +985,10 @@ class AdminRetrainController extends Controller
             }
 
             $payload = [
-                'current'       => $current,
-                'history'       => $this->buildHistory($flaskHistory),
-                'scans_updated' => $scansUpdated,
+                'current'          => $current,
+                'history'          => $this->buildHistory($flaskHistory, false),
+                'archived_history' => $this->buildHistory([], true),
+                'scans_updated'    => $scansUpdated,
             ];
 
             if ($state === 'idle' && ! $hasActiveRun) {
@@ -978,10 +1005,103 @@ class AdminRetrainController extends Controller
                     'state' => 'unknown',
                     'error' => 'ML service unreachable.',
                 ],
-                'history'       => $this->buildHistory([]),
-                'scans_updated' => false,
+                'history'          => $this->buildHistory([], false),
+                'archived_history' => $this->buildHistory([], true),
+                'scans_updated'    => false,
             ], 200);
         }
+    }
+
+    /**
+     * POST /api/admin/retrain/history/archive
+     * Archive one or more retrain history runs
+     */
+    public function archiveHistory(Request $request)
+    {
+        $ids = $this->extractHistoryIds($request);
+        if (empty($ids)) {
+            return response()->json(['message' => 'No valid history run IDs provided.'], 422);
+        }
+
+        $count = RetrainRun::whereIn('id', $ids)->update([
+            'is_archived' => true,
+            'archived_at' => now(),
+        ]);
+
+        Cache::forget('retrain:ml_idle_status');
+
+        return response()->json([
+            'message'          => $count . ' retraining ' . ($count === 1 ? 'run' : 'runs') . ' archived successfully.',
+            'archived_count'   => $count,
+            'history'          => $this->buildHistory([], false),
+            'archived_history' => $this->buildHistory([], true),
+        ]);
+    }
+
+    /**
+     * POST /api/admin/retrain/history/recover
+     * Recover one or more archived retrain history runs back to active
+     */
+    public function recoverHistory(Request $request)
+    {
+        $ids = $this->extractHistoryIds($request);
+        if (empty($ids)) {
+            return response()->json(['message' => 'No valid history run IDs provided.'], 422);
+        }
+
+        $count = RetrainRun::whereIn('id', $ids)->update([
+            'is_archived' => false,
+            'archived_at' => null,
+        ]);
+
+        Cache::forget('retrain:ml_idle_status');
+
+        return response()->json([
+            'message'          => $count . ' retraining ' . ($count === 1 ? 'run' : 'runs') . ' recovered successfully.',
+            'recovered_count'  => $count,
+            'history'          => $this->buildHistory([], false),
+            'archived_history' => $this->buildHistory([], true),
+        ]);
+    }
+
+    /**
+     * POST /api/admin/retrain/history/delete
+     * Permanently delete one or more retrain history runs
+     */
+    public function deleteHistory(Request $request)
+    {
+        $ids = $this->extractHistoryIds($request);
+        if (empty($ids)) {
+            return response()->json(['message' => 'No valid history run IDs provided.'], 422);
+        }
+
+        $count = RetrainRun::whereIn('id', $ids)->delete();
+
+        Cache::forget('retrain:ml_idle_status');
+
+        return response()->json([
+            'message'          => $count . ' retraining ' . ($count === 1 ? 'run' : 'runs') . ' permanently deleted.',
+            'deleted_count'    => $count,
+            'history'          => $this->buildHistory([], false),
+            'archived_history' => $this->buildHistory([], true),
+        ]);
+    }
+
+    /**
+     * Helper to extract an array of integer IDs from request payload
+     */
+    private function extractHistoryIds(Request $request): array
+    {
+        $rawIds = $request->input('ids');
+        if (! is_array($rawIds) && $request->has('id')) {
+            $rawIds = [$request->input('id')];
+        }
+
+        if (! is_array($rawIds)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map('intval', $rawIds), fn ($id) => $id > 0));
     }
 
     /**

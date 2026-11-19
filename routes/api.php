@@ -100,13 +100,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/reports', [AdminController::class, 'reports']);
 
         // AI Retraining
-        Route::get('/retrain/candidates', [AdminRetrainController::class, 'candidates']);
-        Route::get('/retrain/duplicates', [AdminRetrainController::class, 'duplicates']);
-        Route::get('/retrain/status',     [AdminRetrainController::class, 'status']);
-        Route::post('/retrain',           [AdminRetrainController::class, 'trigger']);
-        Route::post('/retrain/restore',   [AdminRetrainController::class, 'restore']);
-        Route::post('/retrain/exclude',   [AdminRetrainController::class, 'exclude']);
-        Route::post('/retrain/refresh',   [AdminRetrainController::class, 'refreshMl']);
+        Route::get('/retrain/candidates',       [AdminRetrainController::class, 'candidates']);
+        Route::get('/retrain/duplicates',       [AdminRetrainController::class, 'duplicates']);
+        Route::get('/retrain/status',           [AdminRetrainController::class, 'status']);
+        Route::post('/retrain',                 [AdminRetrainController::class, 'trigger']);
+        Route::post('/retrain/restore',         [AdminRetrainController::class, 'restore']);
+        Route::post('/retrain/exclude',         [AdminRetrainController::class, 'exclude']);
+        Route::post('/retrain/refresh',         [AdminRetrainController::class, 'refreshMl']);
+        Route::post('/retrain/history/archive', [AdminRetrainController::class, 'archiveHistory']);
+        Route::post('/retrain/history/recover', [AdminRetrainController::class, 'recoverHistory']);
+        Route::post('/retrain/history/delete',  [AdminRetrainController::class, 'deleteHistory']);
 
         // HITL Annotation Queue & Dataset Export
         Route::get('/annotations/pending',       [AdminAnnotationController::class, 'pending']);
