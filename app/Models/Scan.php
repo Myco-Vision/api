@@ -13,6 +13,7 @@ class Scan extends Model
         'user_id',
         'species_id',
         'image_path',
+        'image_hash',
         'result_name',
         'result_classification',
         'confidence_level',

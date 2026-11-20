@@ -135,26 +135,48 @@ class ScanController extends Controller
         set_time_limit(120); // Give extra time for ML inference on CPU
         $speciesRecord = null;
 
-        // 1. Run ML inference first using the uploaded temp file (not yet written to public storage)
+        // 1. Decline duplicate image uploads immediately (Anti-plagiarism / duplicate prevention)
+        $imageHash = hash_file('sha256', $file->path());
+        if ($imageHash) {
+            $userDuplicate = Scan::where('user_id', $user->id)
+                ->where('image_hash', $imageHash)
+                ->first();
+
+            if ($userDuplicate) {
+                return response()->json([
+                    'error'            => 'DUPLICATE_IMAGE',
+                    'message'          => 'This mushroom photo has already been scanned. Duplicate scans of the same image are not permitted.',
+                    'existing_scan_id' => $userDuplicate->id,
+                ], 422);
+            }
+
+            $globalDuplicate = Scan::where('image_hash', $imageHash)->first();
+            if ($globalDuplicate) {
+                return response()->json([
+                    'error'            => 'DUPLICATE_IMAGE',
+                    'message'          => 'This photo has already been contributed to MycoVision. Please upload your own original photo.',
+                    'existing_scan_id' => $globalDuplicate->id,
+                ], 422);
+            }
+        }
+
+        // 2. Run ML inference first using the uploaded temp file (not yet written to public storage)
         $mlResult = $this->classifyWithMlService($file, 90);
         if (! $mlResult['ok']) {
             return response()->json(['message' => $mlResult['message']], $mlResult['status']);
         }
         $mlData = $mlResult['data'];
 
-        // 2. Reject non-mushrooms before touching disk or database
+        // 3. Reject non-mushrooms before touching disk or database
         $resultClass = $mlData['result_classification'] ?? 'unknown';
         if ($resultClass === 'not_mushroom') {
-        return response()->json([
-            'error'                 => 'NOT_MUSHROOM',   // add this
-            'message'               => 'No mushroom detected in the image. Please take a clearer photo of a mushroom.',
-            'result_classification' => 'not_mushroom',
-            'confidence_level'      => $mlData['confidence_level'] ?? 0,
-        ], 422);
-    }
-
-        // 3. Inference passed and confirmed mushroom — save to storage and database
-        $path = $file->store('scans', 'public');
+            return response()->json([
+                'error'                 => 'NOT_MUSHROOM',
+                'message'               => 'No mushroom detected in the image. Please take a clearer photo of a mushroom.',
+                'result_classification' => 'not_mushroom',
+                'confidence_level'      => $mlData['confidence_level'] ?? 0,
+            ], 422);
+        }
 
         $resultName     = $mlData['result_name'] ?? 'Unknown';
         $scientificName = $mlData['scientific_name'] ?? $resultName;
@@ -168,10 +190,42 @@ class ScanController extends Controller
                             ->orWhere('name', $resultName)
                             ->first();
 
+        // 4. Check if the specimen has already been found/unlocked by this user
+        // If already unlocked, decline re-scanning to prevent point farming
+        $alreadyUnlocked = \App\Models\UserMycodex::where('user_id', $user->id)
+            ->where(function ($q) use ($scientificName, $resultName, $commonName, $speciesRecord) {
+                $candidates = array_filter(array_unique([
+                    strtolower(trim((string) $scientificName)),
+                    strtolower(trim((string) $resultName)),
+                    strtolower(trim((string) $commonName)),
+                    $speciesRecord ? strtolower(trim((string) $speciesRecord->name)) : null,
+                    $speciesRecord && $speciesRecord->scientific_name ? strtolower(trim((string) $speciesRecord->scientific_name)) : null,
+                ]));
+                foreach ($candidates as $name) {
+                    $q->orWhereRaw('LOWER(species_name) = ?', [$name]);
+                }
+            })
+            ->first();
+
+        if ($alreadyUnlocked) {
+            return response()->json([
+                'error'            => 'SPECIMEN_ALREADY_UNLOCKED',
+                'message'          => "You have already discovered and unlocked {$resultName} in your MycoDex! Repeat scans of this specimen are disabled to prevent duplicate reward points.",
+                'species_name'     => $resultName,
+                'scientific_name'  => $scientificName,
+                'specimen_id'      => $speciesRecord?->id,
+                'unlocked_tab_url' => '/mycodex?tab=unlocked',
+            ], 422);
+        }
+
+        // 5. Inference passed and confirmed new specimen — save to storage and database
+        $path = $file->store('scans', 'public');
+
         $scan = Scan::create([
             'user_id'               => $user->id,
             'species_id'            => $speciesRecord->id ?? null,
             'image_path'            => $path,
+            'image_hash'            => $imageHash,
             'result_name'           => $resultName,
             'result_classification' => $resultClass,
             'confidence_level'      => $confidence,

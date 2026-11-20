@@ -30,8 +30,12 @@ class MycoDexService
             ];
         }
 
-        // 2. Identify species name
-        $speciesName = $mlData['scientific_name'] ?? $mlData['result_name'] ?? $scan->result_name ?? 'Unknown Mushroom';
+        // 2. Identify species name (prefer official species catalog name if linked)
+        $speciesName = $scan->species?->name 
+            ?? $mlData['scientific_name'] 
+            ?? $mlData['result_name'] 
+            ?? $scan->result_name 
+            ?? 'Unknown Mushroom';
 
         // 3. Normalize confidence (0.00 to 1.00)
         $rawConf = (float) ($scan->confidence_level ?? 0);
@@ -47,20 +51,29 @@ class MycoDexService
 
             $isNewSpecies = is_null($mycodexEntry);
 
-            if ($isNewSpecies) {
-                $mycodexEntry = UserMycodex::create([
-                    'user_id'          => $lockedUser->id,
-                    'species_name'     => $speciesName,
-                    'first_scanned_at' => now(),
-                    'scan_count'       => 1,
-                    'cover_image_path' => $scan->image_path,
-                ]);
-            } else {
-                $mycodexEntry->increment('scan_count');
-                if (empty($mycodexEntry->cover_image_path) && $scan->image_path) {
-                    $mycodexEntry->update(['cover_image_path' => $scan->image_path]);
-                }
+            if (!$isNewSpecies) {
+                // Anti-cheat guard: repeat scans of already unlocked species do NOT award points
+                return [
+                    'eligible'                => false,
+                    'reason'                  => 'already_unlocked',
+                    'species_name'            => $speciesName,
+                    'is_new_species'          => false,
+                    'points_awarded'          => 0,
+                    'scan_count'              => $mycodexEntry->scan_count ?? 1,
+                    'pending_points_total'    => (int) $lockedUser->pending_points,
+                    'verified_points_total'   => (int) $lockedUser->verified_points,
+                    'badge'                   => 'Specimen Already Unlocked',
+                    'message'                 => 'This specimen is already unlocked in your MycoDex. No duplicate points awarded.',
+                ];
             }
+
+            $mycodexEntry = UserMycodex::create([
+                'user_id'          => $lockedUser->id,
+                'species_name'     => $speciesName,
+                'first_scanned_at' => now(),
+                'scan_count'       => 1,
+                'cover_image_path' => $scan->image_path,
+            ]);
 
             // 5. Dynamic points calculation
             // Base scan: +2 for standard high-confidence (>= 0.80)

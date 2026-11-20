@@ -54,6 +54,26 @@ class RewardService
             return ['points_earned' => 0, 'reason' => 'not_eligible'];
         }
 
+        // Anti-cheat guard: Only award points for first-time species discovery
+        $speciesId = $scan->species_id;
+        $speciesName = $scan->result_name;
+        $alreadyRewarded = PointTransaction::where('user_id', $user->id)
+            ->where('type', 'scan_contribution')
+            ->where('reference_type', 'scan')
+            ->where('reference_id', '!=', $scan->id)
+            ->whereHas('scan', function ($q) use ($speciesId, $speciesName) {
+                if ($speciesId) {
+                    $q->where('species_id', $speciesId);
+                } else {
+                    $q->where('result_name', $speciesName);
+                }
+            })
+            ->exists();
+
+        if ($alreadyRewarded) {
+            return ['points_earned' => 0, 'reason' => 'specimen_already_rewarded'];
+        }
+
         $dailyCap = max(0, (int) ($settings['daily_scan_cap'] ?? self::DAILY_SCAN_REWARD_CAP));
         $todayRewardedScans = PointTransaction::where('user_id', $user->id)
             ->where('type', 'scan_contribution')
