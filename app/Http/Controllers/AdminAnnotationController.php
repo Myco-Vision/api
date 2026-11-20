@@ -223,7 +223,7 @@ class AdminAnnotationController extends Controller
     public function export(Request $request)
     {
         $approved = ScanContribution::where('annotation_status', 'approved')
-            ->with('user:id,name,email')
+            ->with(['user:id,name,email', 'scan'])
             ->get();
 
         if ($approved->isEmpty()) {
@@ -242,7 +242,7 @@ class AdminAnnotationController extends Controller
         }
 
         $csvLines = [];
-        $csvLines[] = "contribution_id,scan_id,user_name,user_email,verified_species,predicted_species,confidence_score,points_awarded,file_path_in_zip,approved_at";
+        $csvLines[] = "contribution_id,scan_id,image_preview,image_url,file_path_in_zip,verified_species,predicted_species,confidence_score,points_awarded,user_name,user_email,approved_at";
 
         $exportedCount = 0;
 
@@ -253,6 +253,9 @@ class AdminAnnotationController extends Controller
             }
 
             $fileData = $this->readImageBytes((string) $item->image_path);
+            if (!$fileData && $item->scan?->image_path) {
+                $fileData = $this->readImageBytes((string) $item->scan->image_path);
+            }
             if (!$fileData) {
                 continue;
             }
@@ -263,22 +266,29 @@ class AdminAnnotationController extends Controller
 
             $zip->addFromString($inZipPath, $fileData['bytes']);
 
+            $imageUrl = (string) ($item->image_url ?: ($item->scan?->image_url ?: ''));
+            $safeImageUrl = str_replace('"', '""', $imageUrl);
+            $imageFormula = $imageUrl ? "=IMAGE(\"{$imageUrl}\")" : '';
+            $safeImageFormula = str_replace('"', '""', $imageFormula);
+
             $safeVerified = str_replace('"', '""', $item->verified_species ?: $item->predicted_species);
             $safePredicted = str_replace('"', '""', $item->predicted_species);
             $safeUserName = str_replace('"', '""', $item->user?->name ?? 'Unknown');
             $safeEmail = str_replace('"', '""', $item->user?->email ?? '');
 
             $csvLines[] = sprintf(
-                '%d,%d,"%s","%s","%s","%s",%.4f,%d,"%s","%s"',
+                '%d,%d,"%s","%s","%s","%s","%s",%.4f,%d,"%s","%s","%s"',
                 $item->id,
                 $item->scan_id,
-                $safeUserName,
-                $safeEmail,
+                $safeImageFormula,
+                $safeImageUrl,
+                $inZipPath,
                 $safeVerified,
                 $safePredicted,
                 $item->confidence_score,
                 $item->points_awarded,
-                $inZipPath,
+                $safeUserName,
+                $safeEmail,
                 $item->updated_at?->toIso8601String() ?? now()->toIso8601String()
             );
 
