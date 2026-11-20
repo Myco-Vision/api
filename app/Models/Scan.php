@@ -26,6 +26,9 @@ class Scan extends Model
     ];
 
     protected $casts = [
+        'confidence_level'   => 'float',
+        'latitude'           => 'float',
+        'longitude'          => 'float',
         'retrained_at'       => 'datetime',
         'is_public_sighting' => 'boolean',
     ];

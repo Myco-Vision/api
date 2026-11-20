@@ -87,10 +87,12 @@ class SpeciesController extends Controller
             'scan_id'            => 'nullable|integer',
         ]);
 
+        $scanId = !empty($data['scan_id']) ? (int) $data['scan_id'] : null;
+
         if ($request->hasFile('image')) {
             $data['image_path'] = $request->file('image')->store('species', 'public');
-        } elseif (!empty($data['scan_id']) && empty($data['image_path'])) {
-            $scan = \App\Models\Scan::find($data['scan_id']);
+        } elseif ($scanId && empty($data['image_path'])) {
+            $scan = \App\Models\Scan::find($scanId);
             if ($scan && $scan->image_path) {
                 $data['image_path'] = $scan->image_path;
             }
@@ -109,6 +111,58 @@ class SpeciesController extends Controller
             : true;
 
         $species = Species::create($data);
+
+        // When promoted from a candidate scan, link the scan and approve it for AI Model Retraining
+        if ($scanId) {
+            $scan = \App\Models\Scan::find($scanId);
+            if ($scan) {
+                $updatedClassification = in_array($species->classification, ['edible', 'poisonous'], true)
+                    ? $species->classification
+                    : (in_array($scan->result_classification, ['edible', 'poisonous'], true) ? $scan->result_classification : 'edible');
+
+                $scan->update([
+                    'species_id'            => $species->id,
+                    'result_name'           => $species->name,
+                    'result_classification' => $updatedClassification,
+                    'retrained_at'          => null,
+                ]);
+
+                // Approve any pending HITL contribution (or create an approved contribution) so it reflects in AI Retraining
+                $contribution = \App\Models\ScanContribution::where('scan_id', $scan->id)->first();
+                if ($contribution) {
+                    $previousStatus = $contribution->annotation_status;
+                    $points = (int) $contribution->points_awarded;
+
+                    $contribution->update([
+                        'verified_species'  => $species->name,
+                        'annotation_status' => 'approved',
+                    ]);
+
+                    if ($previousStatus === 'pending' && $points > 0 && $contribution->user_id) {
+                        $contribUser = \App\Models\User::find($contribution->user_id);
+                        if ($contribUser) {
+                            $deduct = min((int) $contribUser->pending_points, $points);
+                            $contribUser->decrement('pending_points', $deduct);
+                            $contribUser->increment('verified_points', $points);
+                        }
+                    }
+                } elseif ($scan->user_id) {
+                    $rawConf = (float) ($scan->confidence_level ?? 0);
+                    $confScore = $rawConf > 1.0 ? ($rawConf / 100.0) : $rawConf;
+                    \App\Models\ScanContribution::create([
+                        'scan_id'                 => $scan->id,
+                        'user_id'                 => $scan->user_id,
+                        'image_path'              => $scan->image_path,
+                        'predicted_species'       => $scan->result_name ?: $species->name,
+                        'verified_species'        => $species->name,
+                        'confidence_score'        => round($confScore, 4),
+                        'annotation_status'       => 'approved',
+                        'points_awarded'          => 0,
+                        'is_new_species_for_user' => false,
+                    ]);
+                }
+            }
+        }
 
         return response()->json($species, 201);
     }

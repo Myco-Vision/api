@@ -84,6 +84,18 @@ class GoogleAuthController extends Controller
             ->first();
 
         if ($user) {
+            if ($user->isArchived()) {
+                return response()->json([
+                    'message' => 'This account has been archived. Please contact an administrator to restore access.',
+                ], 403);
+            }
+
+            if ($user->isAdmin()) {
+                return response()->json([
+                    'message' => 'Administrator accounts must sign in through the dedicated Admin Login portal (/admin/login).',
+                ], 403);
+            }
+
             $needsCompletion = $user->needs_profile_completion
                 || ! $user->contact_number
                 || ! $user->address

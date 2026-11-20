@@ -333,6 +333,72 @@ class AdminRetrainController extends Controller
     }
 
     /**
+     * POST /api/admin/retrain/queue-scan
+     *
+     * Explicitly approves and queues a consented candidate scan from the
+     * Candidate Scans tab directly into the AI Model Retraining dataset.
+     */
+    public function queueCandidateScan(Request $request)
+    {
+        $data = $request->validate([
+            'scan_id'        => 'required|integer|exists:scans,id',
+            'classification' => 'nullable|in:edible,poisonous',
+            'species_name'   => 'nullable|string|max:255',
+        ]);
+
+        $scan = Scan::with('user')->findOrFail($data['scan_id']);
+
+        $cls = $data['classification']
+            ?? (in_array($scan->result_classification, ['edible', 'poisonous'], true) ? $scan->result_classification : 'edible');
+        $speciesName = $data['species_name'] ?? ($scan->result_name ?: 'Verified Mushroom');
+
+        $scan->update([
+            'result_name'           => $speciesName,
+            'result_classification' => $cls,
+            'retrained_at'          => null,
+        ]);
+
+        $contribution = \App\Models\ScanContribution::where('scan_id', $scan->id)->first();
+        if ($contribution) {
+            $previousStatus = $contribution->annotation_status;
+            $points = (int) $contribution->points_awarded;
+
+            $contribution->update([
+                'verified_species'  => $speciesName,
+                'annotation_status' => 'approved',
+            ]);
+
+            if ($previousStatus === 'pending' && $points > 0 && $contribution->user_id) {
+                $contribUser = \App\Models\User::find($contribution->user_id);
+                if ($contribUser) {
+                    $deduct = min((int) $contribUser->pending_points, $points);
+                    $contribUser->decrement('pending_points', $deduct);
+                    $contribUser->increment('verified_points', $points);
+                }
+            }
+        } elseif ($scan->user_id) {
+            $rawConf = (float) ($scan->confidence_level ?? 0);
+            $confScore = $rawConf > 1.0 ? ($rawConf / 100.0) : $rawConf;
+            \App\Models\ScanContribution::create([
+                'scan_id'                 => $scan->id,
+                'user_id'                 => $scan->user_id,
+                'image_path'              => $scan->image_path,
+                'predicted_species'       => $speciesName,
+                'verified_species'        => $speciesName,
+                'confidence_score'        => round($confScore, 4),
+                'annotation_status'       => 'approved',
+                'points_awarded'          => 0,
+                'is_new_species_for_user' => false,
+            ]);
+        }
+
+        return response()->json([
+            'message' => "Scan #{$scan->id} ({$speciesName}) added to AI Model Retraining queue.",
+            'scan'    => $scan->fresh(['user', 'species', 'contribution']),
+        ]);
+    }
+
+    /**
      * GET /api/admin/retrain/duplicates
      *
      * Reviews consented candidate scan images, computes exact (MD5) and perceptual (dHash)

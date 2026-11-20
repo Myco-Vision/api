@@ -5,19 +5,38 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Rules\LegitimateEmail;
 use App\Rules\UniqueEmail;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class AccountManagementController extends Controller
 {
+    private function ensureUsersArchivedColumn(): void
+    {
+        try {
+            if (Schema::hasTable('users') && ! Schema::hasColumn('users', 'archived_at')) {
+                Schema::table('users', function (Blueprint $table) {
+                    $table->timestamp('archived_at')->nullable();
+                });
+            }
+        } catch (\Throwable) {
+            // Ignore if read-only connection
+        }
+    }
     // Same Philippine mobile format enforced at self-registration (0917 123 4567 / +63 917 123 4567)
     private const PH_MOBILE_REGEX = 'regex:/^(\+63|0)[\s\-]*9[\s\-]*\d{2}[\s\-]*\d{3}[\s\-]*\d{4}$/';
     private const PH_MOBILE_MESSAGE = 'Please enter a valid Philippine mobile number (e.g. 0917 123 4567 or +63 917 123 4567).';
 
     public function index(Request $request)
     {
+        $this->ensureUsersArchivedColumn();
+        $status = $request->query('status', 'active');
+
         $users = User::withCount('scans')
+            ->when($status === 'archived', fn ($q) => $q->whereNotNull('archived_at'))
+            ->when($status === 'active', fn ($q) => $q->whereNull('archived_at'))
             ->when($request->search, fn ($q) =>
                 $q->where(function ($q2) use ($request) {
                     $q2->where('name', 'like', "%{$request->search}%")
@@ -31,14 +50,18 @@ class AccountManagementController extends Controller
             ->latest()
             ->paginate($request->per_page ?? 20);
 
-        $counts = User::selectRaw('role, COUNT(*) as c')->groupBy('role')->pluck('c', 'role');
+        $counts = User::whereNull('archived_at')->selectRaw('role, COUNT(*) as c')->groupBy('role')->pluck('c', 'role');
+        $activeCount = User::whereNull('archived_at')->count();
+        $archivedCount = User::whereNotNull('archived_at')->count();
 
         return response()->json(array_merge($users->toArray(), [
             'stats' => [
-                'total'        => $counts->sum(),
-                'super_admins' => $counts['super_admin'] ?? 0,
-                'admins'       => $counts['admin'] ?? 0,
-                'foragers'     => $counts['forager'] ?? 0,
+                'total'          => $activeCount,
+                'super_admins'   => $counts['super_admin'] ?? 0,
+                'admins'         => $counts['admin'] ?? 0,
+                'foragers'       => $counts['forager'] ?? 0,
+                'active_count'   => $activeCount,
+                'archived_count' => $archivedCount,
             ],
         ]));
     }
@@ -177,24 +200,51 @@ class AccountManagementController extends Controller
     }
 
     /**
+     * PUT /api/admin/accounts/{user}/archive
+     * Archive an account instead of deleting it.
+     */
+    public function archive(Request $request, User $user)
+    {
+        $this->ensureUsersArchivedColumn();
+        if ($user->id === $request->user()->id) {
+            return response()->json(['message' => 'You cannot archive your own account.'], 403);
+        }
+
+        if ($user->isSuperAdmin()) {
+            return response()->json(['message' => 'Cannot archive a Super Admin account.'], 403);
+        }
+
+        $user->update(['archived_at' => now()]);
+        $user->tokens()->delete();
+
+        return response()->json([
+            'message' => "Account for {$user->name} archived successfully.",
+            'user'    => $user->fresh(),
+        ]);
+    }
+
+    /**
+     * PUT /api/admin/accounts/{user}/restore
+     * Restore an archived account.
+     */
+    public function restore(Request $request, User $user)
+    {
+        $this->ensureUsersArchivedColumn();
+        $user->update(['archived_at' => null]);
+
+        return response()->json([
+            'message' => "Account for {$user->name} restored successfully.",
+            'user'    => $user->fresh(),
+        ]);
+    }
+
+    /**
      * DELETE /api/admin/accounts/{user}
-     * Delete an account.
+     * Archives the account instead of hard deleting.
      */
     public function destroy(Request $request, User $user)
     {
-        // Prevent self-deletion
-        if ($user->id === $request->user()->id) {
-            return response()->json(['message' => 'You cannot delete your own account.'], 403);
-        }
-
-        // Prevent deletion of other super_admin accounts
-        if ($user->isSuperAdmin()) {
-            return response()->json(['message' => 'Cannot delete a Super Admin account.'], 403);
-        }
-
-        $user->delete();
-
-        return response()->json(['message' => 'Account deleted successfully.']);
+        return $this->archive($request, $user);
     }
 
     /**

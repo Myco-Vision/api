@@ -22,7 +22,13 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        $frontendBaseUrl = fn () => rtrim(trim(explode(',', (string) config('app.frontend_url'))[0] ?? ''), '/');
+        $frontendBaseUrl = function () {
+            $raw = rtrim(trim(explode(',', (string) config('app.frontend_url'))[0] ?? ''), '/');
+            if ($raw === '' || $raw === 'http://localhost' || $raw === 'http://127.0.0.1') {
+                return 'http://localhost:3000';
+            }
+            return $raw;
+        };
 
         // Point password-reset links at the Nuxt frontend instead of the API.
         ResetPassword::createUrlUsing(function ($user, string $token) use ($frontendBaseUrl) {
