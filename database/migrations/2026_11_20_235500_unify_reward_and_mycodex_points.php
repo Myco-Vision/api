@@ -41,3 +41,4 @@ return new class extends Migration
         // No-op for down: unified points remain safely in reward_points
     }
 };
+
