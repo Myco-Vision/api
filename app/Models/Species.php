@@ -15,6 +15,7 @@ class Species extends Model
         'classification',
         'description',
         'image_path',
+        'silhouette_path',
         'habitat',
         'rarity',
         'unlock_points',
@@ -43,6 +44,7 @@ class Species extends Model
 
     protected $appends = [
         'image_url',
+        'silhouette_url',
     ];
 
     public function getImageUrlAttribute(): string
@@ -61,6 +63,24 @@ class Species extends Model
         }
 
         return url('/storage/' . ltrim($this->image_path, '/'));
+    }
+
+    public function getSilhouetteUrlAttribute(): string
+    {
+        if (!$this->silhouette_path) {
+            return '';
+        }
+
+        if (str_starts_with($this->silhouette_path, 'http://') || str_starts_with($this->silhouette_path, 'https://')) {
+            return $this->silhouette_path;
+        }
+
+        $supabaseUrl = env('AWS_URL');
+        if ($supabaseUrl && config('filesystems.disks.public.driver') === 's3') {
+            return rtrim($supabaseUrl, '/') . '/' . ltrim($this->silhouette_path, '/');
+        }
+
+        return url('/storage/' . ltrim($this->silhouette_path, '/'));
     }
 
     public function scans()

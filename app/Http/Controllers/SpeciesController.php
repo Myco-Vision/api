@@ -77,6 +77,8 @@ class SpeciesController extends Controller
             'description'        => 'nullable|string',
             'image'              => 'nullable|image|max:8192',
             'image_path'         => 'nullable|string|max:255',
+            'silhouette'         => 'nullable|image|max:8192',
+            'silhouette_path'    => 'nullable|string|max:255',
             'habitat'            => 'nullable|string|max:5000',
             'rarity'             => 'nullable|string|in:common,uncommon,rare,legendary',
             'unlock_points'      => 'nullable|integer|min:1|max:500',
@@ -94,6 +96,11 @@ class SpeciesController extends Controller
             }
         }
         unset($data['image'], $data['scan_id']);
+
+        if ($request->hasFile('silhouette')) {
+            $data['silhouette_path'] = $request->file('silhouette')->store('species/silhouettes', 'public');
+        }
+        unset($data['silhouette']);
 
         $data['rarity'] = $data['rarity'] ?? 'common';
         $data['unlock_points'] = isset($data['unlock_points']) ? (int) $data['unlock_points'] : 5;
@@ -116,6 +123,8 @@ class SpeciesController extends Controller
             'description'        => 'nullable|string',
             'image'              => 'nullable|image|max:8192',
             'image_path'         => 'nullable|string|max:255',
+            'silhouette'         => 'nullable|image|max:8192',
+            'silhouette_path'    => 'nullable|string|max:255',
             'habitat'            => 'nullable|string|max:5000',
             'rarity'             => 'nullable|string|in:common,uncommon,rare,legendary',
             'unlock_points'      => 'nullable|integer|min:1|max:500',
@@ -128,8 +137,26 @@ class SpeciesController extends Controller
                 Storage::disk('public')->delete($species->image_path);
             }
             $data['image_path'] = $request->file('image')->store('species', 'public');
+        } elseif ($request->has('image_path') && empty($data['image_path'])) {
+            if ($species->image_path && !str_starts_with($species->image_path, 'http')) {
+                Storage::disk('public')->delete($species->image_path);
+            }
+            $data['image_path'] = null;
         }
         unset($data['image']);
+
+        if ($request->hasFile('silhouette')) {
+            if ($species->silhouette_path && !str_starts_with($species->silhouette_path, 'http')) {
+                Storage::disk('public')->delete($species->silhouette_path);
+            }
+            $data['silhouette_path'] = $request->file('silhouette')->store('species/silhouettes', 'public');
+        } elseif ($request->has('silhouette_path') && empty($data['silhouette_path'])) {
+            if ($species->silhouette_path && !str_starts_with($species->silhouette_path, 'http')) {
+                Storage::disk('public')->delete($species->silhouette_path);
+            }
+            $data['silhouette_path'] = null;
+        }
+        unset($data['silhouette']);
 
         if ($request->has('is_active_mycodex')) {
             $data['is_active_mycodex'] = filter_var($request->input('is_active_mycodex'), FILTER_VALIDATE_BOOLEAN);
