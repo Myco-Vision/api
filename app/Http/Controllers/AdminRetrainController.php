@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\RetrainRun;
 use App\Models\Scan;
+use App\Models\Species;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -11,6 +12,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use ZipArchive;
 
 class AdminRetrainController extends Controller
 {
@@ -232,23 +234,25 @@ class AdminRetrainController extends Controller
      */
     private function consentedScansQuery(bool $alreadyRetrained = false)
     {
-        $query = Scan::whereHas('collectionItems.folder', fn ($q) => $q->where('allow_ai_training', true))
-            ->whereIn('result_classification', ['edible', 'poisonous'])
+        $query = Scan::whereIn('result_classification', ['edible', 'poisonous'])
             ->whereNotNull('image_path')
             ->where(function ($q) {
-                // Three pathways for consent:
-                // 1. Approved crowdsourced contributions
-                $q->whereHas('contribution', fn ($c) => $c->where('annotation_status', 'approved'))
-                  // 2. Admin/super_admin baseline seeds without contributions
-                  ->orWhere(function ($sub) {
-                      $sub->whereDoesntHave('contribution')
-                          ->whereHas('user', fn ($u) => $u->where('role', 'super_admin')->orWhere('role', 'admin'));
-                  })
-                  // 3. Regular user scans in folders with allow_ai_training=true (NEW)
-                  ->orWhere(function ($sub) {
-                      $sub->whereDoesntHave('contribution')
-                          ->whereHas('user', fn ($u) => $u->where('role', 'forager'));
-                  });
+                // Three pathways for consent / retraining dataset eligibility:
+                // 1. Approved crowdsourced contributions from research-consenting users
+                $q->where(function ($sub) {
+                    $sub->whereHas('contribution', fn ($c) => $c->where('annotation_status', 'approved'))
+                        ->whereHas('user', fn ($u) => $u->where('allow_data_training', true));
+                })
+                // 2. Admin/super_admin baseline seeds and direct computer uploads
+                ->orWhere(function ($sub) {
+                    $sub->whereDoesntHave('contribution')
+                        ->whereHas('user', fn ($u) => $u->whereIn('role', ['super_admin', 'admin']));
+                })
+                // 3. Regular user scans in folders with allow_ai_training=true
+                ->orWhere(function ($sub) {
+                    $sub->whereDoesntHave('contribution')
+                        ->whereHas('collectionItems.folder', fn ($f) => $f->where('allow_ai_training', true));
+                });
             });
 
         return $alreadyRetrained
@@ -308,6 +312,174 @@ class AdminRetrainController extends Controller
                 'total'           => $retrainedEdible->count() + $retrainedPoisonous->count(),
             ],
         ]);
+    }
+
+    /**
+     * POST /api/admin/retrain/upload
+     *
+     * Upload mushroom images directly from the admin's computer into the retraining dataset.
+     */
+    public function upload(Request $request)
+    {
+        $data = $request->validate([
+            'images'         => 'required|array|min:1',
+            'images.*'       => 'required|file|image|mimes:jpeg,png,jpg,webp|max:15360',
+            'classification' => 'required|string|in:edible,poisonous',
+            'species_name'   => 'nullable|string|max:255',
+            'species_id'     => 'nullable|integer|exists:species,id',
+        ]);
+
+        $speciesName = trim((string) ($data['species_name'] ?? ''));
+        if (empty($speciesName) && !empty($data['species_id'])) {
+            $speciesName = Species::find($data['species_id'])?->name ?: '';
+        }
+        if (empty($speciesName)) {
+            $speciesName = 'Admin Uploaded ' . ucfirst($data['classification']);
+        }
+
+        $created = [];
+        $files = $request->file('images');
+
+        foreach ($files as $file) {
+            $storedPath = $file->store('scans/admin', 'public');
+            $imageHash = @md5_file($file->getRealPath()) ?: null;
+
+            $scan = Scan::create([
+                'user_id'               => $request->user()->id,
+                'species_id'            => $data['species_id'] ?? null,
+                'image_path'            => $storedPath,
+                'image_hash'            => $imageHash,
+                'result_name'           => $speciesName,
+                'result_classification' => $data['classification'],
+                'confidence_level'      => 100.0,
+                'retrained_at'          => null,
+            ]);
+
+            $created[] = $this->formatScanCandidate($scan->fresh(['user']));
+        }
+
+        return response()->json([
+            'message'        => count($created) . " {$data['classification']} image(s) uploaded successfully to the retraining dataset.",
+            'uploaded_count' => count($created),
+            'classification' => $data['classification'],
+            'species_name'   => $speciesName,
+            'scans'          => $created,
+        ], 201);
+    }
+
+    /**
+     * GET /api/admin/retrain/export
+     *
+     * Export retraining mushroom images into a downloadable ZIP archive with metadata CSV.
+     */
+    public function export(Request $request)
+    {
+        $classification = $request->query('classification', 'all'); // 'edible' | 'poisonous' | 'all'
+        $scope          = $request->query('scope', 'ready');         // 'ready' | 'trained' | 'all'
+        $idsParam       = $request->query('ids');
+
+        $query = Scan::whereNotNull('image_path')
+            ->whereIn('result_classification', ['edible', 'poisonous'])
+            ->with(['user:id,name,role']);
+
+        if (!empty($idsParam)) {
+            $ids = array_filter(array_map('intval', explode(',', (string) $idsParam)));
+            $query->whereIn('id', $ids);
+        } else {
+            if ($scope === 'all') {
+                $query = Scan::whereIn('result_classification', ['edible', 'poisonous'])
+                    ->whereNotNull('image_path')
+                    ->where(function ($q) {
+                        $q->where(function ($sub) {
+                            $sub->whereHas('contribution', fn ($c) => $c->where('annotation_status', 'approved'))
+                                ->whereHas('user', fn ($u) => $u->where('allow_data_training', true));
+                        })
+                        ->orWhere(function ($sub) {
+                            $sub->whereDoesntHave('contribution')
+                                ->whereHas('user', fn ($u) => $u->whereIn('role', ['super_admin', 'admin']));
+                        })
+                        ->orWhere(function ($sub) {
+                            $sub->whereDoesntHave('contribution')
+                                ->whereHas('collectionItems.folder', fn ($f) => $f->where('allow_ai_training', true));
+                        });
+                    });
+            } else {
+                $query = $this->consentedScansQuery($scope === 'trained');
+            }
+
+            if ($classification !== 'all' && in_array($classification, ['edible', 'poisonous'], true)) {
+                $query->where('result_classification', $classification);
+            }
+        }
+
+        $scans = $query->latest('id')->get();
+
+        if ($scans->isEmpty()) {
+            return response()->json([
+                'message' => 'No retraining mushroom images found matching the export filter.',
+            ], 422);
+        }
+
+        $tmpDir = sys_get_temp_dir();
+        $classLabel = in_array($classification, ['edible', 'poisonous'], true) ? $classification : 'all';
+        $zipFilename = 'mycovision_retrain_' . $classLabel . '_images_' . now()->format('Ymd_His') . '.zip';
+        $zipPath = $tmpDir . DIRECTORY_SEPARATOR . $zipFilename;
+
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            return response()->json(['message' => 'Could not create ZIP archive on server.'], 500);
+        }
+
+        $csvLines = [];
+        $csvLines[] = "scan_id,classification,species_name,confidence,file_path_in_zip,uploaded_by,source,created_at";
+
+        $exportedCount = 0;
+
+        foreach ($scans as $scan) {
+            $fileData = $this->readScanImageContents($scan);
+            if (!$fileData || empty($fileData['contents'])) {
+                continue;
+            }
+
+            $clsFolder = strtolower($scan->result_classification ?? 'unknown');
+            $speciesFolder = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $scan->result_name ?: 'unnamed_species');
+            $safeFilename = preg_replace('/[^a-zA-Z0-9_\-\.]/', '_', $fileData['filename'] ?: "scan_{$scan->id}.jpg");
+            $inZipPath = "{$clsFolder}/{$speciesFolder}/scan_{$scan->id}_{$safeFilename}";
+
+            $zip->addFromString($inZipPath, $fileData['contents']);
+
+            $safeSpecies = str_replace('"', '""', $scan->result_name ?: '');
+            $safeUser = str_replace('"', '""', $scan->user?->name ?? 'Admin');
+            $source = $scan->user?->role === 'forager' ? 'forager_scan' : 'admin_import';
+
+            $csvLines[] = sprintf(
+                '%d,"%s","%s",%.2f,"%s","%s","%s","%s"',
+                $scan->id,
+                $clsFolder,
+                $safeSpecies,
+                $scan->confidence_level ?? 0,
+                $inZipPath,
+                $safeUser,
+                $source,
+                $scan->created_at?->toIso8601String() ?? ''
+            );
+
+            $exportedCount++;
+        }
+
+        $zip->addFromString('metadata.csv', implode("\n", $csvLines));
+        $zip->close();
+
+        if ($exportedCount === 0 || !file_exists($zipPath)) {
+            @unlink($zipPath);
+            return response()->json([
+                'message' => 'None of the selected mushroom images could be read from storage.',
+            ], 422);
+        }
+
+        return response()->download($zipPath, $zipFilename, [
+            'Content-Type' => 'application/zip',
+        ])->deleteFileAfterSend(true);
     }
 
     /**

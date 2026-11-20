@@ -120,6 +120,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/retrain/duplicates',       [AdminRetrainController::class, 'duplicates']);
         Route::get('/retrain/status',           [AdminRetrainController::class, 'status']);
         Route::post('/retrain',                 [AdminRetrainController::class, 'trigger']);
+        Route::post('/retrain/upload',          [AdminRetrainController::class, 'upload']);
+        Route::get('/retrain/export',           [AdminRetrainController::class, 'export']);
         Route::post('/retrain/queue-scan',      [AdminRetrainController::class, 'queueCandidateScan']);
         Route::post('/retrain/restore',         [AdminRetrainController::class, 'restore']);
         Route::post('/retrain/exclude',         [AdminRetrainController::class, 'exclude']);
