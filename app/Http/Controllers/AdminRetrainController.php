@@ -93,13 +93,17 @@ class AdminRetrainController extends Controller
         }
 
         // 3. Fallback: fetch from public S3/Supabase URL if configured while using local disk
-        $publicBaseUrl = config('filesystems.disks.s3.url') ?: env('AWS_URL');
+        $publicBaseUrl = config('filesystems.disks.public.url')
+            ?: config('filesystems.disks.s3.url')
+            ?: env('AWS_URL')
+            ?: 'https://jxraqiaqkyimzopzgeeo.supabase.co/storage/v1/object/public/mycovision';
+
         if ($publicBaseUrl) {
             $host = parse_url($publicBaseUrl, PHP_URL_HOST);
             if ($host && ! in_array(strtolower($host), ['localhost', '127.0.0.1', '::1'], true)) {
                 $remoteUrl = rtrim((string) $publicBaseUrl, '/') . '/' . ltrim($imagePath, '/');
                 try {
-                    $res = Http::timeout(4)->connectTimeout(2)->get($remoteUrl);
+                    $res = Http::timeout(6)->get($remoteUrl);
                     if ($res->successful() && $res->body() !== '') {
                         return [
                             'contents' => $res->body(),
@@ -232,9 +236,13 @@ class AdminRetrainController extends Controller
             ->whereIn('result_classification', ['edible', 'poisonous'])
             ->whereNotNull('image_path')
             ->where(function ($q) {
-                // Crowdsourced scans with contributions must be explicitly 'approved' by an admin
+                // Crowdsourced scans must be explicitly 'approved' by an admin HITL review,
+                // or belong to admin accounts for baseline seeds without contribution rows.
                 $q->whereHas('contribution', fn ($c) => $c->where('annotation_status', 'approved'))
-                  ->orWhereDoesntHave('contribution');
+                  ->orWhere(function ($sub) {
+                      $sub->whereDoesntHave('contribution')
+                          ->whereHas('user', fn ($u) => $u->where('role', 'super_admin')->orWhere('role', 'admin'));
+                  });
             });
 
         return $alreadyRetrained
@@ -343,14 +351,8 @@ class AdminRetrainController extends Controller
     {
         $scope = $request->query('scope', 'ready'); // 'ready' (default) | 'all'
 
-        $query = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
-            ->whereIn('result_classification', ['edible', 'poisonous'])
-            ->whereNotNull('image_path')
-            ->with('user:id,name');
-
-        if ($scope === 'ready') {
-            $query->whereNull('retrained_at');
-        }
+        $query = $this->consentedScansQuery($scope === 'all')
+            ->with(['user:id,name,role', 'contribution']);
 
         $scans = $query->orderBy('created_at', 'asc')->get();
 
@@ -373,7 +375,13 @@ class AdminRetrainController extends Controller
         foreach ($scans as $scan) {
             $hashData = $this->computeScanImageHashes($scan);
             if (! $hashData) {
-                continue;
+                // Even if image content cannot be read over network, retain scan for metadata duplicate matching
+                $hashData = [
+                    'md5'   => $scan->image_hash ?: "scan_hash_{$scan->id}",
+                    'sha1'  => '',
+                    'size'  => 0,
+                    'dhash' => null,
+                ];
             }
             $validScans[$scan->id]   = $scan;
             $fingerprints[$scan->id] = $hashData;
@@ -420,19 +428,27 @@ class AdminRetrainController extends Controller
         for ($i = 0; $i < $count; $i++) {
             $id1 = $scanIds[$i];
             $fp1 = $fingerprints[$id1];
+            $s1  = $validScans[$id1];
 
             for ($j = $i + 1; $j < $count; $j++) {
                 $id2 = $scanIds[$j];
                 $fp2 = $fingerprints[$id2];
+                $s2  = $validScans[$id2];
 
-                $isExact  = ($fp1['md5'] === $fp2['md5']);
+                $isExact = (! empty($fp1['md5']) && ! empty($fp2['md5']) && $fp1['md5'] === $fp2['md5'] && ! str_starts_with($fp1['md5'], 'scan_hash_'));
+                $isHashExact = (! empty($s1->image_hash) && ! empty($s2->image_hash) && $s1->image_hash === $s2->image_hash);
+
                 $distance = 64;
-
                 if (! $isExact && ! empty($fp1['dhash']) && ! empty($fp2['dhash'])) {
                     $distance = $this->hammingDistance($fp1['dhash'], $fp2['dhash']);
                 }
 
-                if ($isExact) {
+                $isSameUserAndSpecimen = ($s1->user_id && $s1->user_id === $s2->user_id) && (
+                    ($s1->species_id && $s1->species_id === $s2->species_id) ||
+                    (strtolower(trim((string) $s1->result_name)) === strtolower(trim((string) $s2->result_name)))
+                );
+
+                if ($isExact || $isHashExact) {
                     $union($id1, $id2);
                     $pairKey = min($id1, $id2) . '_' . max($id1, $id2);
                     $pairwiseMatches[$pairKey] = ['type' => 'exact', 'distance' => 0];
@@ -440,6 +456,10 @@ class AdminRetrainController extends Controller
                     $union($id1, $id2);
                     $pairKey = min($id1, $id2) . '_' . max($id1, $id2);
                     $pairwiseMatches[$pairKey] = ['type' => 'perceptual', 'distance' => $distance];
+                } elseif ($isSameUserAndSpecimen) {
+                    $union($id1, $id2);
+                    $pairKey = min($id1, $id2) . '_' . max($id1, $id2);
+                    $pairwiseMatches[$pairKey] = ['type' => 'specimen', 'distance' => 8];
                 }
             }
         }
@@ -476,14 +496,17 @@ class AdminRetrainController extends Controller
                 return $a->created_at <=> $b->created_at;
             });
 
-            // Determine if exact or perceptual
+            // Determine if exact, specimen, or perceptual
             $hasPerceptual = false;
+            $hasSpecimen   = false;
             $maxDistance   = 0;
             for ($x = 0; $x < count($memberIds); $x++) {
                 for ($y = $x + 1; $y < count($memberIds); $y++) {
                     $pKey = min($memberIds[$x], $memberIds[$y]) . '_' . max($memberIds[$x], $memberIds[$y]);
                     if (isset($pairwiseMatches[$pKey])) {
-                        if ($pairwiseMatches[$pKey]['type'] === 'perceptual') {
+                        if ($pairwiseMatches[$pKey]['type'] === 'specimen') {
+                            $hasSpecimen = true;
+                        } elseif ($pairwiseMatches[$pKey]['type'] === 'perceptual') {
                             $hasPerceptual = true;
                             $maxDistance   = max($maxDistance, $pairwiseMatches[$pKey]['distance']);
                         }
@@ -491,10 +514,10 @@ class AdminRetrainController extends Controller
                 }
             }
 
-            $matchType  = $hasPerceptual ? 'perceptual' : 'exact';
+            $matchType  = $hasPerceptual ? 'perceptual' : ($hasSpecimen ? 'specimen' : 'exact');
             $similarity = $hasPerceptual
                 ? round((1 - ($maxDistance / 64)) * 100, 1)
-                : 100;
+                : ($hasSpecimen ? 92.0 : 100.0);
 
             // Check for classification conflicts
             $classifications = array_unique(array_map(fn ($s) => $s->result_classification, $memberScans));
