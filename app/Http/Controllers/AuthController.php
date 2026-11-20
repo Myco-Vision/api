@@ -251,16 +251,24 @@ class AuthController extends Controller
     // POST /api/login
     public function login(Request $request)
     {
-        $request->merge([
-            'email' => strtolower(trim((string) $request->input('email', ''))),
-        ]);
+        $login = strtolower(trim((string) ($request->input('login') ?? $request->input('email', ''))));
 
         $data = $request->validate([
-            'email'    => 'required|email',
+            'email'    => 'sometimes|string',
+            'login'    => 'sometimes|string',
             'password' => 'required|string',
         ]);
 
-        $user = User::whereRaw('LOWER(email) = ?', [$data['email']])->first();
+        if (empty($login)) {
+            throw ValidationException::withMessages([
+                'email' => ['Please enter your email address or username.'],
+            ]);
+        }
+
+        // Support login using either email or username
+        $user = User::whereRaw('LOWER(email) = ?', [$login])
+            ->orWhereRaw('LOWER(username) = ?', [$login])
+            ->first();
 
         if (! $user || ! Hash::check($data['password'], $user->password)) {
             throw ValidationException::withMessages([
