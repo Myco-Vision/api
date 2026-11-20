@@ -135,26 +135,38 @@ class ScanController extends Controller
         set_time_limit(120); // Give extra time for ML inference on CPU
         $speciesRecord = null;
 
-        // 1. Decline duplicate image uploads immediately (Anti-plagiarism / duplicate prevention)
-        $imageHash = hash_file('sha256', $file->path());
-        if ($imageHash) {
+        // 1. Decline duplicate image uploads immediately (Anti-plagiarism / exact photo duplicate prevention)
+        $imageHash = null;
+        $tempPath = $file->getRealPath() ?: $file->path();
+        if ($tempPath && file_exists($tempPath)) {
+            $calc = @hash_file('sha256', $tempPath);
+            if ($calc && is_string($calc) && strlen($calc) === 64) {
+                $imageHash = $calc;
+            }
+        }
+
+        if (! empty($imageHash)) {
             $userDuplicate = Scan::where('user_id', $user->id)
+                ->whereNotNull('image_hash')
                 ->where('image_hash', $imageHash)
                 ->first();
 
             if ($userDuplicate) {
                 return response()->json([
                     'error'            => 'DUPLICATE_IMAGE',
-                    'message'          => 'This mushroom photo has already been scanned. Duplicate scans of the same image are not permitted.',
+                    'message'          => 'This exact mushroom photo has already been scanned. Please upload a new original photo.',
                     'existing_scan_id' => $userDuplicate->id,
                 ], 422);
             }
 
-            $globalDuplicate = Scan::where('image_hash', $imageHash)->first();
+            $globalDuplicate = Scan::whereNotNull('image_hash')
+                ->where('image_hash', $imageHash)
+                ->first();
+
             if ($globalDuplicate) {
                 return response()->json([
                     'error'            => 'DUPLICATE_IMAGE',
-                    'message'          => 'This photo has already been contributed to MycoVision. Please upload your own original photo.',
+                    'message'          => 'This exact photo has already been contributed to MycoVision. Please upload your own original photo.',
                     'existing_scan_id' => $globalDuplicate->id,
                 ], 422);
             }
@@ -191,7 +203,7 @@ class ScanController extends Controller
                             ->first();
 
         // 4. Check if the specimen has already been found/unlocked by this user
-        // If already unlocked, decline re-scanning to prevent point farming
+        // Repeat scans of unlocked species are permitted for identification, but do NOT award duplicate points
         $alreadyUnlocked = \App\Models\UserMycodex::where('user_id', $user->id)
             ->where(function ($q) use ($scientificName, $resultName, $commonName, $speciesRecord) {
                 $candidates = array_filter(array_unique([
@@ -205,27 +217,16 @@ class ScanController extends Controller
                     $q->orWhereRaw('LOWER(species_name) = ?', [$name]);
                 }
             })
-            ->first();
+            ->exists();
 
-        if ($alreadyUnlocked) {
-            return response()->json([
-                'error'            => 'SPECIMEN_ALREADY_UNLOCKED',
-                'message'          => "You have already discovered and unlocked {$resultName} in your MycoDex! Repeat scans of this specimen are disabled to prevent duplicate reward points.",
-                'species_name'     => $resultName,
-                'scientific_name'  => $scientificName,
-                'specimen_id'      => $speciesRecord?->id,
-                'unlocked_tab_url' => '/mycodex?tab=unlocked',
-            ], 422);
-        }
-
-        // 5. Inference passed and confirmed new specimen — save to storage and database
+        // 5. Save to storage and database
         $path = $file->store('scans', 'public');
 
         $scan = Scan::create([
             'user_id'               => $user->id,
             'species_id'            => $speciesRecord->id ?? null,
             'image_path'            => $path,
-            'image_hash'            => $imageHash,
+            'image_hash'            => $imageHash ?: null,
             'result_name'           => $resultName,
             'result_classification' => $resultClass,
             'confidence_level'      => $confidence,
@@ -240,6 +241,7 @@ class ScanController extends Controller
         $mycodexResult = (new \App\Services\MycoDexService())->handleScanSubmission($user, $scan, $mlData);
 
         $scanPayload = $scan->load(['species', 'contribution'])->toArray();
+        $scanPayload['already_unlocked'] = (bool) $alreadyUnlocked;
         $scanPayload['reward'] = $rewardResult;
         $scanPayload['mycodex_reward'] = $mycodexResult;
 
