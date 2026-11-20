@@ -23,6 +23,7 @@ class AdminRewardController extends Controller
         $settings = $this->rewardService->getSettings();
 
         $totalCirculating = (int) User::sum('reward_points');
+        $totalPending = (int) User::sum('pending_points');
         $totalEarned = (int) PointTransaction::where('points', '>', 0)->sum('points');
         $totalRedeemed = (int) abs((int) PointTransaction::where('points', '<', 0)->sum('points'));
         $usersWithPoints = (int) User::where('reward_points', '>', 0)->count();
@@ -36,6 +37,7 @@ class AdminRewardController extends Controller
             'settings' => $settings,
             'stats' => [
                 'total_circulating' => $totalCirculating,
+                'total_pending'     => $totalPending,
                 'total_earned'      => $totalEarned,
                 'total_redeemed'    => $totalRedeemed,
                 'users_with_points' => $usersWithPoints,
@@ -55,6 +57,7 @@ class AdminRewardController extends Controller
             'points_per_scan'       => 'required|integer|min:0|max:500',
             'points_location_bonus' => 'required|integer|min:0|max:500',
             'points_retrain_bonus'  => 'required|integer|min:0|max:1000',
+            'points_weekly_pass'    => 'nullable|integer|min:5|max:1000',
             'daily_scan_cap'        => 'required|integer|min:0|max:100',
             'min_redeem_points'     => 'required|integer|min:1|max:5000',
             'php_per_point'         => 'required|numeric|min:0.1|max:100',

@@ -464,6 +464,16 @@ class ScanController extends Controller
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
+        // Clean up pending contribution points so user has zero phantom points
+        $contribution = $scan->contribution;
+        if ($contribution && $contribution->annotation_status === 'pending' && (int) $contribution->points_awarded > 0) {
+            $user = User::whereKey($scan->user_id)->lockForUpdate()->first();
+            if ($user) {
+                $deduct = min((int) $user->pending_points, (int) $contribution->points_awarded);
+                $user->decrement('pending_points', $deduct);
+            }
+        }
+
         Storage::disk('public')->delete($scan->image_path);
         $scan->delete();
 

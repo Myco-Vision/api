@@ -209,19 +209,21 @@ class MycoDexService
             }
         }
 
-        $verifiedPoints = (int) ($user->verified_points ?? 0);
+        $spendablePoints = (int) ($user->reward_points ?? 0);
         $pendingPoints = (int) ($user->pending_points ?? 0);
-        $progressPct = min(100, round(($verifiedPoints / 100) * 100));
+        $pointsRequired = 35;
+        $progressPct = min(100, round(($spendablePoints / $pointsRequired) * 100));
 
         $activeSub = $user->activeSubscription;
 
         $latestActive = $catalogSpecies->sortByDesc('id')->first();
 
         return [
-            'verified_points'  => $verifiedPoints,
+            'reward_points'    => $spendablePoints,
+            'verified_points'  => $spendablePoints, // Unified for frontend compatibility
             'pending_points'   => $pendingPoints,
-            'points_required'  => 100,
-            'can_redeem'       => $verifiedPoints >= 100,
+            'points_required'  => $pointsRequired,
+            'can_redeem'       => $spendablePoints >= $pointsRequired,
             'progress_percent' => $progressPct,
             'subscription'     => [
                 'is_subscribed' => $user->hasActiveSubscription(),
@@ -244,61 +246,11 @@ class MycoDexService
     }
 
     /**
-     * Redeem 100 verified points for a 7-day Pro subscription pass.
+     * Redeem 35 reward points for a 7-day Pro subscription pass.
+     * Uses the unified RewardService engine.
      */
     public function redeemSubscription(User $user): array
     {
-        return DB::transaction(function () use ($user) {
-            $lockedUser = User::where('id', $user->id)->lockForUpdate()->first();
-
-            $verified = (int) ($lockedUser->verified_points ?? 0);
-            if ($verified < 100) {
-                throw new \InvalidArgumentException("Insufficient verified points. You have {$verified} of 100 required points.");
-            }
-
-            // Deduct 100 verified points
-            $lockedUser->decrement('verified_points', 100);
-
-            // Extend or activate subscription
-            $activeSub = $lockedUser->subscriptions()
-                ->where('status', 'active')
-                ->where('expires_at', '>', now())
-                ->latest('id')
-                ->first();
-
-            if ($activeSub) {
-                $currentExpiry = Carbon::parse($activeSub->expires_at);
-                $newExpiry = $currentExpiry->isFuture() ? $currentExpiry->addDays(7) : now()->addDays(7);
-                $activeSub->expires_at = $newExpiry;
-                $activeSub->save();
-                $expiresAt = $newExpiry;
-                $actionType = 'extended';
-            } else {
-                $expiresAt = now()->addDays(7);
-                $newSub = Subscription::create([
-                    'user_id'        => $lockedUser->id,
-                    'plan'           => 'pro_pass',
-                    'status'         => 'active',
-                    'auto_renew'     => false,
-                    'payment_status' => 'paid',
-                    'payment_method' => 'points_redemption',
-                    'price'          => 0,
-                    'currency'       => 'PHP',
-                    'starts_at'      => now(),
-                    'expires_at'     => $expiresAt,
-                    'metadata'       => ['redeemed_with_points' => 100],
-                ]);
-                $actionType = 'activated';
-            }
-
-            return [
-                'success'               => true,
-                'action'                => $actionType,
-                'message'               => "Successfully redeemed 100 points! Your Pro access has been {$actionType} by 7 days.",
-                'remaining_verified'    => (int) $lockedUser->fresh()->verified_points,
-                'expires_at'            => $expiresAt->toIso8601String(),
-                'expires_human'         => $expiresAt->toFormattedDateString(),
-            ];
-        });
+        return (new RewardService())->redeemProPass($user, 7);
     }
 }

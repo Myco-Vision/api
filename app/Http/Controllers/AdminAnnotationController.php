@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\PointTransaction;
 use App\Models\Scan;
 use App\Models\ScanContribution;
 use App\Models\Species;
@@ -159,20 +160,29 @@ class AdminAnnotationController extends Controller
                 Scan::where('id', $contribution->scan_id)->update(['retrained_at' => null]);
             }
 
-            // Transfer points from pending to verified
+            // Transfer points from pending to unified reward_points with transaction audit
             if ($previousStatus === 'pending' && $points > 0 && $contribution->user_id) {
                 $user = User::where('id', $contribution->user_id)->lockForUpdate()->first();
                 if ($user) {
                     $deduct = min((int) $user->pending_points, $points);
                     $user->decrement('pending_points', $deduct);
-                    $user->increment('verified_points', $points);
+                    $user->increment('reward_points', $points);
+
+                    PointTransaction::create([
+                        'user_id'        => $user->id,
+                        'points'         => $points,
+                        'type'           => 'annotation_approved',
+                        'description'    => "AI data contribution verified by verifier ({$verifiedSpecies})",
+                        'reference_type' => 'scan_contribution',
+                        'reference_id'   => $contribution->id,
+                    ]);
                 }
             }
         });
 
         return response()->json([
-            'message'          => "Annotation approved as '{$verifiedSpecies}'. Points moved to user verified points.",
-            'contribution'     => $contribution->fresh()->load('user:id,name,pending_points,verified_points'),
+            'message'          => "Annotation approved as '{$verifiedSpecies}'. Points credited to user reward wallet.",
+            'contribution'     => $contribution->fresh()->load('user:id,name,reward_points,pending_points,verified_points'),
         ]);
     }
 
@@ -200,19 +210,28 @@ class AdminAnnotationController extends Controller
                 Scan::where('id', $contribution->scan_id)->update(['retrained_at' => now()]);
             }
 
-            // Deduct points from pending_points
+            // Deduct points from pending_points with audit log
             if ($previousStatus === 'pending' && $points > 0 && $contribution->user_id) {
                 $user = User::where('id', $contribution->user_id)->lockForUpdate()->first();
                 if ($user) {
                     $deduct = min((int) $user->pending_points, $points);
                     $user->decrement('pending_points', $deduct);
+
+                    PointTransaction::create([
+                        'user_id'        => $user->id,
+                        'points'         => 0,
+                        'type'           => 'annotation_rejected',
+                        'description'    => "AI data contribution rejected by verifier: {$contribution->predicted_species}",
+                        'reference_type' => 'scan_contribution',
+                        'reference_id'   => $contribution->id,
+                    ]);
                 }
             }
         });
 
         return response()->json([
             'message'      => 'Annotation rejected. Points deducted from user pending points.',
-            'contribution' => $contribution->fresh()->load('user:id,name,pending_points,verified_points'),
+            'contribution' => $contribution->fresh()->load('user:id,name,reward_points,pending_points,verified_points'),
         ]);
     }
 

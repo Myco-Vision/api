@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\PointTransaction;
 use App\Models\RefundRequest;
 use App\Models\Subscription;
 use App\Models\SubscriptionEvent;
+use App\Models\User;
 use App\Services\PayMongoService;
 use App\Services\RefundPolicyService;
 use App\Services\TransactionEmailService;
@@ -301,6 +303,23 @@ class RefundController extends Controller
 
             $sub = $locked->subscription;
             $isFull = (float) $locked->approved_amount >= (float) $sub->price;
+
+            // Restore any points spent on this subscription to prevent point loss/arbitrage
+            $pointsUsed = (int) ($sub->metadata['points_used'] ?? 0);
+            if ($pointsUsed > 0 && $locked->user_id) {
+                $user = User::whereKey($locked->user_id)->lockForUpdate()->first();
+                if ($user) {
+                    $user->increment('reward_points', $pointsUsed);
+                    PointTransaction::create([
+                        'user_id'        => $user->id,
+                        'points'         => $pointsUsed,
+                        'type'           => 'refund_point_restoration',
+                        'description'    => "Restored {$pointsUsed} points from refunded subscription #{$sub->id}",
+                        'reference_type' => 'subscription',
+                        'reference_id'   => $sub->id,
+                    ]);
+                }
+            }
 
             $sub->update([
                 'status'         => 'cancelled',

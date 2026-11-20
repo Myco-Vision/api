@@ -5,7 +5,12 @@ namespace App\Services;
 use App\Models\AppSetting;
 use App\Models\PointTransaction;
 use App\Models\Scan;
+use App\Models\Species;
+use App\Models\Subscription;
+use App\Models\SubscriptionEvent;
 use App\Models\User;
+use App\Models\UserMycodex;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class RewardService
@@ -13,6 +18,7 @@ class RewardService
     public const POINTS_PER_SCAN = 5;
     public const POINTS_LOCATION_BONUS = 3;
     public const POINTS_RETRAIN_BONUS = 15;
+    public const POINTS_WEEKLY_PASS = 35;
     public const DAILY_SCAN_REWARD_CAP = 5;
     public const MIN_PAYMONGO_AMOUNT_PHP = 20;
     public const MIN_REDEEM_POINTS = 10;
@@ -22,6 +28,7 @@ class RewardService
         'points_per_scan'       => self::POINTS_PER_SCAN,
         'points_location_bonus' => self::POINTS_LOCATION_BONUS,
         'points_retrain_bonus'  => self::POINTS_RETRAIN_BONUS,
+        'points_weekly_pass'    => self::POINTS_WEEKLY_PASS,
         'daily_scan_cap'        => self::DAILY_SCAN_REWARD_CAP,
         'min_redeem_points'     => self::MIN_REDEEM_POINTS,
         'php_per_point'         => 1.0,
@@ -41,6 +48,7 @@ class RewardService
 
     /**
      * Award points when a consented user submits a valid mushroom scan.
+     * Features: Target specimen discovery bounties, GPS bonuses, and anti-farming protection.
      */
     public function awardForScan(User $user, Scan $scan): array
     {
@@ -54,72 +62,120 @@ class RewardService
             return ['points_earned' => 0, 'reason' => 'not_eligible'];
         }
 
-        // Anti-cheat guard: Only award points for first-time species discovery
-        $speciesId = $scan->species_id;
-        $speciesName = $scan->result_name;
-        $alreadyRewardedScanIds = PointTransaction::where('user_id', $user->id)
-            ->where('type', 'scan_contribution')
-            ->where('reference_type', 'scan')
-            ->where('reference_id', '!=', $scan->id)
-            ->pluck('reference_id');
+        // Identify clean specimen name
+        $speciesName = trim((string) ($scan->species?->name ?? $scan->result_name ?? 'Unknown Mushroom'));
+        $cleanSpeciesLower = strtolower($speciesName);
 
-        $alreadyRewarded = false;
-        if ($alreadyRewardedScanIds->isNotEmpty()) {
-            $alreadyRewarded = Scan::whereIn('id', $alreadyRewardedScanIds)
-                ->where(function ($q) use ($speciesId, $speciesName) {
-                    if ($speciesId) {
-                        $q->where('species_id', $speciesId);
-                    } else {
-                        $q->where('result_name', $speciesName);
-                    }
-                })
-                ->exists();
-        }
+        // Anti-farming check: Check if already discovered in user's MycoDex collection
+        $mycodexEntry = UserMycodex::where('user_id', $user->id)
+            ->where(function ($q) use ($speciesName, $cleanSpeciesLower) {
+                $q->where('species_name', $speciesName)
+                  ->orWhereRaw('LOWER(species_name) = ?', [$cleanSpeciesLower]);
+            })
+            ->first();
 
-        if ($alreadyRewarded) {
-            return ['points_earned' => 0, 'reason' => 'specimen_already_rewarded'];
+        // Also check immutable point transaction history for duplicate species discovery
+        $alreadyRewardedDiscovery = PointTransaction::where('user_id', $user->id)
+            ->where('type', 'species_discovery_bounty')
+            ->where(function ($q) use ($speciesName, $cleanSpeciesLower) {
+                $q->where('description', 'like', "%{$speciesName}%")
+                  ->orWhereRaw('LOWER(description) like ?', ["%{$cleanSpeciesLower}%"]);
+            })
+            ->exists();
+
+        $isNewDiscovery = is_null($mycodexEntry) && !$alreadyRewardedDiscovery;
+
+        if (!$isNewDiscovery) {
+            $mycodexEntry?->increment('scan_count');
+            return [
+                'points_earned'    => 0,
+                'reason'           => 'specimen_already_rewarded',
+                'is_new_discovery' => false,
+            ];
         }
 
         $dailyCap = max(0, (int) ($settings['daily_scan_cap'] ?? self::DAILY_SCAN_REWARD_CAP));
         $todayRewardedScans = PointTransaction::where('user_id', $user->id)
-            ->where('type', 'scan_contribution')
+            ->whereIn('type', ['scan_contribution', 'species_discovery_bounty'])
             ->whereDate('created_at', now()->toDateString())
-            ->count();
+            ->distinct('reference_id')
+            ->count('reference_id');
 
         if ($dailyCap > 0 && $todayRewardedScans >= $dailyCap) {
-            return ['points_earned' => 0, 'reason' => 'daily_cap_reached'];
+            return [
+                'points_earned'    => 0,
+                'reason'           => 'daily_cap_reached',
+                'is_new_discovery' => true,
+            ];
         }
 
         $ptsPerScan = max(0, (int) ($settings['points_per_scan'] ?? self::POINTS_PER_SCAN));
         $ptsLocation = max(0, (int) ($settings['points_location_bonus'] ?? self::POINTS_LOCATION_BONUS));
 
-        if ($ptsPerScan === 0 && $ptsLocation === 0) {
-            return ['points_earned' => 0, 'reason' => 'zero_points_configured'];
+        // Lookup species catalog for target discovery bounty (configured per species or rarity)
+        $specimen = $scan->species ?? Species::whereRaw('LOWER(name) = ?', [$cleanSpeciesLower])
+            ->orWhereRaw('LOWER(scientific_name) = ?', [$cleanSpeciesLower])
+            ->first();
+        $discoveryBounty = max(5, (int) ($specimen?->unlock_points ?: 5));
+        $rarity = $specimen?->rarity ?: 'common';
+
+        // Validate geographic coordinates (finite, valid global range, non-zero)
+        $hasLocation = false;
+        if (!is_null($scan->latitude) && !is_null($scan->longitude)) {
+            $lat = (float) $scan->latitude;
+            $lng = (float) $scan->longitude;
+            if (is_finite($lat) && is_finite($lng) && $lat >= -90.0 && $lat <= 90.0 && $lng >= -180.0 && $lng <= 180.0 && ($lat != 0.0 || $lng != 0.0)) {
+                $hasLocation = true;
+            }
         }
 
-        return DB::transaction(function () use ($user, $scan, $ptsPerScan, $ptsLocation) {
+        return DB::transaction(function () use ($user, $scan, $ptsPerScan, $ptsLocation, $discoveryBounty, $speciesName, $cleanSpeciesLower, $rarity, $hasLocation, $specimen) {
             $lockedUser = User::where('id', $user->id)->lockForUpdate()->first();
             $totalEarned = 0;
 
+            // 1. Award Target Specimen Discovery Bounty
+            if ($discoveryBounty > 0) {
+                PointTransaction::create([
+                    'user_id'        => $lockedUser->id,
+                    'points'         => $discoveryBounty,
+                    'type'           => 'species_discovery_bounty',
+                    'description'    => "Target Discovery Bounty: First scan of {$speciesName} ({$rarity})",
+                    'reference_type' => 'species',
+                    'reference_id'   => $specimen?->id ?: $scan->id,
+                ]);
+                $totalEarned += $discoveryBounty;
+            }
+
+            // 2. Add to user's MycoDex collection permanently
+            try {
+                UserMycodex::firstOrCreate(
+                    ['user_id' => $lockedUser->id, 'species_name' => $speciesName],
+                    ['first_scanned_at' => now(), 'scan_count' => 1, 'cover_image_path' => $scan->image_path]
+                );
+            } catch (\Throwable $e) {
+                // Ignore unique constraint collisions on race condition
+            }
+
+            // 3. Award base scan contribution points
             if ($ptsPerScan > 0) {
                 PointTransaction::create([
                     'user_id'        => $lockedUser->id,
                     'points'         => $ptsPerScan,
                     'type'           => 'scan_contribution',
-                    'description'    => "Contributed scan ({$scan->result_name}) for AI improvement",
+                    'description'    => "Contributed scan ({$speciesName}) for AI improvement",
                     'reference_type' => 'scan',
                     'reference_id'   => $scan->id,
                 ]);
                 $totalEarned += $ptsPerScan;
             }
 
-            $hasLocation = !is_null($scan->latitude) && !is_null($scan->longitude);
+            // 4. Award verified location bonus
             if ($hasLocation && $ptsLocation > 0) {
                 PointTransaction::create([
                     'user_id'        => $lockedUser->id,
                     'points'         => $ptsLocation,
                     'type'           => 'location_bonus',
-                    'description'    => "Geotagged location bonus for {$scan->result_name}",
+                    'description'    => "Geotagged location bonus for {$speciesName}",
                     'reference_type' => 'scan',
                     'reference_id'   => $scan->id,
                 ]);
@@ -131,9 +187,11 @@ class RewardService
             }
 
             return [
-                'points_earned' => $totalEarned,
-                'has_location'  => $hasLocation,
-                'new_balance'   => $lockedUser->fresh()->reward_points,
+                'points_earned'    => $totalEarned,
+                'discovery_bounty' => $discoveryBounty,
+                'has_location'     => $hasLocation,
+                'is_new_discovery' => true,
+                'new_balance'      => $lockedUser->fresh()->reward_points,
             ];
         });
     }
@@ -333,8 +391,101 @@ class RewardService
     public function getDailyRewardedScanCount(User $user): int
     {
         return PointTransaction::where('user_id', $user->id)
-            ->where('type', 'scan_contribution')
+            ->whereIn('type', ['scan_contribution', 'species_discovery_bounty'])
             ->whereDate('created_at', now()->toDateString())
             ->count();
+    }
+
+    /**
+     * Atomically redeem unified reward points for a Pro Pass (default 7 days for 35 points).
+     * Supports seamless stacking on top of existing active subscriptions.
+     */
+    public function redeemProPass(User $user, int $days = 7): array
+    {
+        $settings = $this->getSettings();
+        $cost = (int) ($settings['points_weekly_pass'] ?? self::POINTS_WEEKLY_PASS);
+
+        return DB::transaction(function () use ($user, $days, $cost) {
+            $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+            $available = (int) ($lockedUser->reward_points ?? 0);
+
+            if ($available < $cost) {
+                throw new \InvalidArgumentException("Insufficient reward points. You have {$available} of {$cost} required points.");
+            }
+
+            // Deduct points
+            $lockedUser->decrement('reward_points', $cost);
+
+            // Extend or activate subscription
+            $activeSub = $lockedUser->subscriptions()
+                ->where('status', 'active')
+                ->where('expires_at', '>', now())
+                ->latest('expires_at')
+                ->first();
+
+            $startsAt = now();
+            if ($activeSub && $activeSub->expires_at && $activeSub->expires_at->isFuture()) {
+                $baseExpiry = Carbon::parse($activeSub->expires_at);
+                $expiresAt = $baseExpiry->addDays($days);
+                $activeSub->expires_at = $expiresAt;
+                $activeSub->save();
+                $actionType = 'extended';
+                $sub = $activeSub;
+            } else {
+                $expiresAt = now()->addDays($days);
+                $sub = Subscription::create([
+                    'user_id'             => $lockedUser->id,
+                    'plan'                => 'pro_pass',
+                    'status'              => 'active',
+                    'auto_renew'          => false,
+                    'payment_status'      => 'paid',
+                    'payment_method'      => 'reward_points',
+                    'price'               => 0,
+                    'currency'            => 'PHP',
+                    'paymongo_session_id' => 'pts_' . bin2hex(random_bytes(8)),
+                    'starts_at'           => $startsAt,
+                    'expires_at'          => $expiresAt,
+                    'metadata'            => [
+                        'mode'        => 'reward_points_pass',
+                        'points_used' => $cost,
+                        'pass_days'   => $days,
+                    ],
+                ]);
+                $actionType = 'activated';
+            }
+
+            PointTransaction::create([
+                'user_id'        => $lockedUser->id,
+                'points'         => -$cost,
+                'type'           => 'subscription_redemption',
+                'description'    => "Redeemed {$cost} pts for {$days}-Day Pro Pass ({$actionType})",
+                'reference_type' => 'subscription',
+                'reference_id'   => $sub->id,
+            ]);
+
+            SubscriptionEvent::log($lockedUser->id, $actionType, $sub->id, null, [
+                'plan'           => 'pro_pass',
+                'payment_method' => 'reward_points',
+                'points_used'    => $cost,
+                'pass_days'      => $days,
+                'source'         => 'points_pass_redemption',
+            ]);
+
+            try {
+                app(\App\Services\TransactionEmailService::class)->sendPaymentReceipt($sub);
+            } catch (\Throwable $e) {
+                // Email delivery failure does not abort pass activation
+            }
+
+            return [
+                'success'          => true,
+                'action'           => $actionType,
+                'message'          => "Successfully redeemed {$cost} points! Your Pro access has been {$actionType} by {$days} days.",
+                'remaining_points' => (int) $lockedUser->fresh()->reward_points,
+                'expires_at'       => $expiresAt->toIso8601String(),
+                'expires_human'    => $expiresAt->toFormattedDateString(),
+                'subscription'     => $sub,
+            ];
+        });
     }
 }

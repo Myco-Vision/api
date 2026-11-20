@@ -29,6 +29,7 @@ class RewardController extends Controller
         return response()->json([
             'enabled'             => (bool) ($settings['enabled'] ?? true),
             'reward_points'       => (int) $user->reward_points,
+            'pending_points'      => (int) $user->pending_points,
             'points_value_php'    => round((int) $user->reward_points * $phpPerPoint, 2),
             'allow_data_training' => (bool) $user->allow_data_training,
             'daily_scan_count'    => $this->rewardService->getDailyRewardedScanCount($user),
@@ -37,6 +38,7 @@ class RewardController extends Controller
                 'scan_contribution'     => (int) ($settings['points_per_scan'] ?? RewardService::POINTS_PER_SCAN),
                 'location_bonus'        => (int) ($settings['points_location_bonus'] ?? RewardService::POINTS_LOCATION_BONUS),
                 'retrain_bonus'         => (int) ($settings['points_retrain_bonus'] ?? RewardService::POINTS_RETRAIN_BONUS),
+                'points_weekly_pass'    => (int) ($settings['points_weekly_pass'] ?? RewardService::POINTS_WEEKLY_PASS),
                 'min_redeem_points'     => (int) ($settings['min_redeem_points'] ?? RewardService::MIN_REDEEM_POINTS),
                 'php_per_point'         => $phpPerPoint,
                 'allow_full_redemption' => (bool) ($settings['allow_full_redemption'] ?? true),

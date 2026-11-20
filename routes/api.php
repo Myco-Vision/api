@@ -52,10 +52,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/user',           [AuthController::class, 'deleteAccount'])->middleware('throttle:5,1');
 
     // Subscriptions
-    Route::get('/subscription/status',    [SubscriptionController::class, 'status']);
-    Route::post('/subscription/checkout', [SubscriptionController::class, 'checkout']);
-    Route::post('/subscription/verify',   [SubscriptionController::class, 'verify']);
-    Route::post('/subscription/cancel',   [SubscriptionController::class, 'cancel']);
+    Route::get('/subscription/status',       [SubscriptionController::class, 'status']);
+    Route::post('/subscription/checkout',    [SubscriptionController::class, 'checkout']);
+    Route::post('/subscription/redeem-pass', [SubscriptionController::class, 'redeemPass']);
+    Route::post('/subscription/verify',      [SubscriptionController::class, 'verify']);
+    Route::post('/subscription/cancel',      [SubscriptionController::class, 'cancel']);
 
     // Rewards
     Route::get('/rewards', [RewardController::class, 'index']);

@@ -163,7 +163,7 @@ class SubscriptionController extends Controller
     public function checkout(Request $request)
     {
         $data = $request->validate([
-            'plan'           => 'required|string|in:monthly,annual',
+            'plan'           => 'required|string|in:monthly,annual,pro_pass',
             'payment_method' => 'nullable|string|in:gcash',
             'points_to_use'  => 'nullable|integer|min:0',
             'success_url'    => 'nullable|string',
@@ -172,6 +172,21 @@ class SubscriptionController extends Controller
 
         $user = $request->user();
         $planKey = $data['plan'];
+
+        if ($planKey === 'pro_pass') {
+            try {
+                $result = $this->rewardService->redeemProPass($user, 7);
+                return response()->json([
+                    'redeemed_full' => true,
+                    'message'       => $result['message'],
+                    'subscription'  => $result['subscription'],
+                    'user'          => $user->fresh(),
+                    'discount'      => ['points_used' => 35, 'is_full_redemption' => true],
+                ]);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['message' => $e->getMessage()], 422);
+            }
+        }
         $planDetails = $this->payMongoService->getPlan($planKey);
 
         if (!$planDetails) {
@@ -304,6 +319,23 @@ class SubscriptionController extends Controller
             return response()->json([
                 'message' => 'Unable to create checkout session. ' . $e->getMessage(),
             ], 500);
+        }
+    }
+
+    /**
+     * POST /api/subscription/redeem-pass
+     * Redeems 35 reward points for a 7-day Pro pass.
+     */
+    public function redeemPass(Request $request)
+    {
+        $user = $request->user();
+        try {
+            $result = $this->rewardService->redeemProPass($user, 7);
+            return response()->json($result);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Failed to redeem pass: ' . $e->getMessage()], 500);
         }
     }
 

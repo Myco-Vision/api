@@ -35,6 +35,29 @@ class RewardPointsTest extends TestCase
             $table->id();
             $table->string('name');
             $table->string('scientific_name')->nullable();
+            $table->string('rarity', 50)->default('common');
+            $table->integer('unlock_points')->default(5);
+            $table->timestamps();
+        });
+
+        Schema::create('user_mycodex', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->string('species_name');
+            $table->timestamp('first_scanned_at')->useCurrent();
+            $table->integer('scan_count')->default(1);
+            $table->string('cover_image_path')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('subscription_events', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $table->string('deleted_user_email')->nullable();
+            $table->foreignId('subscription_id')->nullable();
+            $table->foreignId('admin_id')->nullable();
+            $table->string('action', 50);
+            $table->json('details')->nullable();
             $table->timestamps();
         });
 
@@ -110,7 +133,7 @@ class RewardPointsTest extends TestCase
 
         $user = User::factory()->create(['allow_data_training' => true]);
 
-        // 5 geotagged scans = 5 * (5 + 3) = 40 pts
+        // 5 geotagged scans = 5 * (5 + 3 + 5 bounty) = 65 pts
         for ($i = 0; $i < 5; $i++) {
             $scan = Scan::create([
                 'user_id' => $user->id,
@@ -122,7 +145,7 @@ class RewardPointsTest extends TestCase
                 'longitude' => 120.9842,
             ]);
             $res = $service->awardForScan($user, $scan);
-            $this->assertSame(8, $res['points_earned']);
+            $this->assertSame(13, $res['points_earned']);
         }
 
         // 6th scan hits daily cap
@@ -134,7 +157,7 @@ class RewardPointsTest extends TestCase
             'confidence_level' => 90,
         ]);
         $this->assertSame(0, $service->awardForScan($user, $scan6)['points_earned']);
-        $this->assertSame(40, $user->fresh()->reward_points);
+        $this->assertSame(65, $user->fresh()->reward_points);
     }
 
     public function test_retrain_bonus_is_awarded_once_per_scan(): void
@@ -224,16 +247,91 @@ class RewardPointsTest extends TestCase
         $this->assertFalse($discount['is_full_redemption']);
         $this->assertSame(74, $discount['discount_php']);
 
-        // Scan awards updated 12 + 4 = 16 pts
+        // Scan awards updated 12 + 4 + 5 (bounty) = 21 pts
         $scan = Scan::create([
             'user_id' => $user->id,
             'image_path' => 'scans/custom.jpg',
-            'result_name' => 'Oyster',
+            'result_name' => 'Oyster Custom',
             'result_classification' => 'edible',
             'confidence_level' => 95,
             'latitude' => 14.5,
             'longitude' => 121.0,
         ]);
-        $this->assertSame(16, $service->awardForScan($user->fresh(), $scan)['points_earned']);
+        $this->assertSame(21, $service->awardForScan($user->fresh(), $scan)['points_earned']);
+    }
+
+    public function test_target_species_discovery_bounty_awarded_on_first_scan(): void
+    {
+        $service = new RewardService();
+        $user = User::factory()->create(['allow_data_training' => true]);
+
+        // Create a rare species with 15 unlock bounty points
+        $species = \App\Models\Species::create([
+            'name'          => 'Flowerpot Parasol',
+            'rarity'        => 'rare',
+            'unlock_points' => 15,
+        ]);
+
+        $scan = Scan::create([
+            'user_id'               => $user->id,
+            'species_id'            => $species->id,
+            'image_path'            => 'scans/parasol.jpg',
+            'result_name'           => 'Flowerpot Parasol',
+            'result_classification' => 'poisonous',
+            'confidence_level'      => 96,
+            'latitude'              => 14.5995,
+            'longitude'             => 120.9842,
+        ]);
+
+        $res = $service->awardForScan($user, $scan);
+
+        // 5 (base) + 3 (location) + 15 (discovery bounty) = 23 pts
+        $this->assertSame(23, $res['points_earned']);
+        $this->assertSame(15, $res['discovery_bounty']);
+        $this->assertTrue($res['is_new_discovery']);
+        $this->assertSame(23, $user->fresh()->reward_points);
+
+        // Repeat scan of the same species receives 0 duplicate discovery points
+        $scanRepeat = Scan::create([
+            'user_id'               => $user->id,
+            'species_id'            => $species->id,
+            'image_path'            => 'scans/parasol_2.jpg',
+            'result_name'           => 'Flowerpot Parasol',
+            'result_classification' => 'poisonous',
+            'confidence_level'      => 96,
+            'latitude'              => 14.5995,
+            'longitude'             => 120.9842,
+        ]);
+
+        $repeatRes = $service->awardForScan($user, $scanRepeat);
+        $this->assertSame(0, $repeatRes['points_earned']);
+        $this->assertSame('specimen_already_rewarded', $repeatRes['reason']);
+        $this->assertSame(23, $user->fresh()->reward_points);
+    }
+
+    public function test_pro_pass_micro_redemption_for_35_points_and_stacking(): void
+    {
+        $service = new RewardService();
+        $user = User::factory()->create([
+            'allow_data_training' => true,
+            'reward_points'       => 70, // enough for 2 weekly passes
+        ]);
+
+        // 1st redemption: Activates 7-day Pro Pass
+        $redemption1 = $service->redeemProPass($user, 7);
+        $this->assertTrue($redemption1['success']);
+        $this->assertSame('activated', $redemption1['action']);
+        $this->assertSame(35, $redemption1['remaining_points']);
+        $this->assertTrue($user->fresh()->hasActiveSubscription());
+
+        // 2nd redemption: Stacks +7 days on top of existing subscription
+        $firstExpiry = \Carbon\Carbon::parse($redemption1['expires_at']);
+        $redemption2 = $service->redeemProPass($user, 7);
+        $this->assertTrue($redemption2['success']);
+        $this->assertSame('extended', $redemption2['action']);
+        $this->assertSame(0, $redemption2['remaining_points']);
+
+        $secondExpiry = \Carbon\Carbon::parse($redemption2['expires_at']);
+        $this->assertEquals(7, (int) round($firstExpiry->diffInDays($secondExpiry)));
     }
 }
