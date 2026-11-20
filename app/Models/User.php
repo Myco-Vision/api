@@ -114,6 +114,11 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(ScanContribution::class);
     }
 
+    public function collectionFolders()
+    {
+        return $this->hasMany(CollectionFolder::class);
+    }
+
     public function activeSubscription()
     {
         return $this->hasOne(Subscription::class)

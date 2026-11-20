@@ -72,4 +72,14 @@ class Scan extends Model
     {
         return $this->hasOne(ScanContribution::class);
     }
+
+    public function collectionItems()
+    {
+        return $this->hasMany(CollectionItem::class);
+    }
+
+    public function collectionFolders()
+    {
+        return $this->belongsToMany(CollectionFolder::class, 'collection_items');
+    }
 }
