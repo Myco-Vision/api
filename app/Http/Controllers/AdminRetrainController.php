@@ -232,16 +232,22 @@ class AdminRetrainController extends Controller
      */
     private function consentedScansQuery(bool $alreadyRetrained = false)
     {
-        $query = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
+        $query = Scan::whereHas('collectionItems.folder', fn ($q) => $q->where('allow_ai_training', true))
             ->whereIn('result_classification', ['edible', 'poisonous'])
             ->whereNotNull('image_path')
             ->where(function ($q) {
-                // Crowdsourced scans must be explicitly 'approved' by an admin HITL review,
-                // or belong to admin accounts for baseline seeds without contribution rows.
+                // Three pathways for consent:
+                // 1. Approved crowdsourced contributions
                 $q->whereHas('contribution', fn ($c) => $c->where('annotation_status', 'approved'))
+                  // 2. Admin/super_admin baseline seeds without contributions
                   ->orWhere(function ($sub) {
                       $sub->whereDoesntHave('contribution')
                           ->whereHas('user', fn ($u) => $u->where('role', 'super_admin')->orWhere('role', 'admin'));
+                  })
+                  // 3. Regular user scans in folders with allow_ai_training=true (NEW)
+                  ->orWhere(function ($sub) {
+                      $sub->whereDoesntHave('contribution')
+                          ->whereHas('user', fn ($u) => $u->where('role', 'forager'));
                   });
             });
 
