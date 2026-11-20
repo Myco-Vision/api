@@ -80,6 +80,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/scans/{scan}/details', [ScanController::class, 'updateDetails']);
     Route::delete('/scans/{scan}',        [ScanController::class, 'destroy']);
 
+    // Collection Folders — static routes MUST come before wildcard {folder} routes
+    Route::get('/collections',                                        [\App\Http\Controllers\CollectionController::class, 'index']);
+    Route::post('/collections',                                       [\App\Http\Controllers\CollectionController::class, 'store']);
+    Route::get('/collections/scan/{scan}/folders',                    [\App\Http\Controllers\CollectionController::class, 'foldersForScan']);
+    Route::get('/collections/{folder}/scans',                         [\App\Http\Controllers\CollectionController::class, 'scans']);
+    Route::post('/collections/{folder}/scans',                        [\App\Http\Controllers\CollectionController::class, 'addScan']);
+    Route::delete('/collections/{folder}/scans/{scan}',               [\App\Http\Controllers\CollectionController::class, 'removeScan']);
+    Route::put('/collections/{folder}',                               [\App\Http\Controllers\CollectionController::class, 'update']);
+    Route::delete('/collections/{folder}',                            [\App\Http\Controllers\CollectionController::class, 'destroy']);
+
     // ── Admin-only routes ────────────────────────────────────────────────────
     Route::middleware('admin')->prefix('admin')->group(function () {
 
