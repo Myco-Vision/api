@@ -178,3 +178,4 @@ class CollectionTest extends TestCase
             ->assertStatus(403);
     }
 }
+
