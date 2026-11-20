@@ -155,9 +155,28 @@ class AdminAnnotationController extends Controller
             $contribution->annotation_status = 'approved';
             $contribution->save();
 
-            // Make associated scan eligible for retraining
+            // Make associated scan eligible for retraining and sync verified species/classification
             if ($contribution->scan_id) {
-                Scan::where('id', $contribution->scan_id)->update(['retrained_at' => null]);
+                $matchedSpecies = Species::whereRaw('LOWER(name) = ?', [strtolower(trim((string) $verifiedSpecies))])
+                    ->orWhereRaw('LOWER(scientific_name) = ?', [strtolower(trim((string) $verifiedSpecies))])
+                    ->first();
+
+                $scan = Scan::find($contribution->scan_id);
+                if ($scan) {
+                    $cls = $scan->result_classification;
+                    if ($matchedSpecies && in_array($matchedSpecies->classification, ['edible', 'poisonous'], true)) {
+                        $cls = $matchedSpecies->classification;
+                    } elseif (! in_array($cls, ['edible', 'poisonous'], true)) {
+                        $cls = 'edible';
+                    }
+
+                    $scan->update([
+                        'species_id'            => $matchedSpecies?->id ?? $scan->species_id,
+                        'result_name'           => $verifiedSpecies ?: $scan->result_name,
+                        'result_classification' => $cls,
+                        'retrained_at'          => null,
+                    ]);
+                }
             }
 
             // Transfer points from pending to unified reward_points with transaction audit

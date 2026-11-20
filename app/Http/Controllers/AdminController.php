@@ -8,10 +8,24 @@ use App\Models\Species;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Database\Schema\Blueprint;
 use Carbon\Carbon;
 
 class AdminController extends Controller
 {
+    private function ensureUsersArchivedColumn(): void
+    {
+        try {
+            if (Schema::hasTable('users') && ! Schema::hasColumn('users', 'archived_at')) {
+                Schema::table('users', function (Blueprint $table) {
+                    $table->timestamp('archived_at')->nullable();
+                });
+            }
+        } catch (\Throwable) {
+            // Ignore if read-only connection
+        }
+    }
     // GET /api/admin/dashboard  — key stats + recent scans + chart data
     public function dashboard()
     {
@@ -95,8 +109,13 @@ class AdminController extends Controller
     // GET /api/admin/users
     public function users(Request $request)
     {
+        $this->ensureUsersArchivedColumn();
+        $status = $request->query('status', 'active');
+
         $users = User::withCount('scans')
             ->with('activeSubscription')
+            ->when($status === 'archived', fn ($q) => $q->whereNotNull('archived_at'))
+            ->when($status === 'active', fn ($q) => $q->whereNull('archived_at'))
             ->when($request->search, fn ($q) =>
                 $q->where(fn ($q2) => $q2
                     ->where('name', 'like', "%{$request->search}%")
@@ -109,7 +128,16 @@ class AdminController extends Controller
             ->latest()
             ->paginate($request->per_page ?? 20);
 
-        return response()->json($users);
+        $activeCount = User::whereNull('archived_at')->count();
+        $archivedCount = User::whereNotNull('archived_at')->count();
+
+        return response()->json(array_merge($users->toArray(), [
+            'stats' => [
+                'total'          => $activeCount + $archivedCount,
+                'active_count'   => $activeCount,
+                'archived_count' => $archivedCount,
+            ],
+        ]));
     }
 
     // GET /api/admin/users/{user}
@@ -118,24 +146,48 @@ class AdminController extends Controller
         return response()->json($user->loadCount('scans')->load('scans'));
     }
 
-    // DELETE /api/admin/users/{user}
-    public function destroyUser(User $user)
+    // PUT /api/admin/users/{user}/archive
+    public function archiveUser(User $user)
     {
+        $this->ensureUsersArchivedColumn();
         if ($user->isSuperAdmin()) {
-            return response()->json(['message' => 'Cannot delete a Super Admin account.'], 403);
+            return response()->json(['message' => 'Cannot archive a Super Admin account.'], 403);
         }
         if ($user->isAdmin()) {
-            return response()->json(['message' => 'Cannot delete an admin account. Use Account Management.'], 403);
+            return response()->json(['message' => 'Cannot archive an admin account here. Use Account Management.'], 403);
         }
-        $user->delete();
 
-        return response()->json(['message' => 'User deleted.']);
+        $user->update(['archived_at' => now()]);
+        $user->tokens()->delete();
+
+        return response()->json([
+            'message' => "Account for {$user->name} has been archived.",
+            'user'    => $user->fresh(),
+        ]);
+    }
+
+    // PUT /api/admin/users/{user}/restore
+    public function restoreUser(User $user)
+    {
+        $this->ensureUsersArchivedColumn();
+        $user->update(['archived_at' => null]);
+
+        return response()->json([
+            'message' => "Account for {$user->name} has been restored.",
+            'user'    => $user->fresh(),
+        ]);
+    }
+
+    // DELETE /api/admin/users/{user} — Archives instead of deleting
+    public function destroyUser(User $user)
+    {
+        return $this->archiveUser($user);
     }
 
     // GET /api/admin/scans
     public function scans(Request $request)
     {
-        $scans = Scan::with('user', 'species')
+        $baseQuery = Scan::with(['user', 'species', 'contribution'])
             ->when($request->user_id, fn ($q) => $q->where('user_id', $request->user_id))
             ->when($request->has('only_consented') && ($request->boolean('only_consented') || $request->only_consented == '1'), function ($q) {
                 $q->whereHas('user', function ($u) {
@@ -163,11 +215,29 @@ class AdminController extends Controller
                           ->whereYear('created_at', now()->year);
                         break;
                 }
-            })
+            });
+
+        $scans = (clone $baseQuery)
             ->latest()
             ->paginate($request->per_page ?? 20);
 
-        return response()->json($scans);
+        $items = collect($scans->items());
+        $edibleCount = $items->where('result_classification', 'edible')->count();
+        $poisonousCount = $items->where('result_classification', 'poisonous')->count();
+        $unknownCount = $items->count() - $edibleCount - $poisonousCount;
+        $avgConf = $items->count() > 0
+            ? round((float) $items->avg(fn ($s) => (float) ($s->confidence_level ?? 0)), 1)
+            : 0.0;
+
+        $payload = $scans->toArray();
+        $payload['meta'] = [
+            'edible_count'    => $edibleCount,
+            'poisonous_count' => $poisonousCount,
+            'unknown_count'   => max(0, $unknownCount),
+            'avg_confidence'  => $avgConf,
+        ];
+
+        return response()->json($payload);
     }
 
     // GET /api/admin/scans/candidates — Privacy Filtered Scans for AI Model Training

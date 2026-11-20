@@ -21,12 +21,14 @@ Route::middleware('throttle:20,1')->group(function () {
     Route::post('/register',       [AuthController::class, 'register']);
     Route::get('/register/check-email', [AuthController::class, 'checkEmail']);
     Route::post('/login',          [AuthController::class, 'login']);
+    Route::post('/admin/login',    [AuthController::class, 'adminLogin']);
     Route::post('/auth/google',                 [GoogleAuthController::class, 'handleToken']);
     Route::post('/auth/google/verify-password', [GoogleAuthController::class, 'verifyPassword']);
     Route::post('/forgot-password', [AuthController::class, 'sendResetLink']);
     Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
     Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
     Route::post('/email/verification-notification', [AuthController::class, 'resendVerification'])->middleware('throttle:6,1');
+    Route::get('/user/archive/verify/{id}/{hash}', [AuthController::class, 'verifyArchiveAccount'])->name('user.archive.verify');
 });
 
 // Public species listing (users can browse without logging in)
@@ -48,8 +50,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/complete-profile', [AuthController::class, 'completeProfile']);
     Route::post('/change-password',  [AuthController::class, 'changePassword']);
     Route::post('/user/profile',     [AuthController::class, 'updateProfile']);
-    Route::post('/user/avatar',      [AuthController::class, 'updateAvatar'])->middleware('throttle:10,1');
-    Route::delete('/user',           [AuthController::class, 'deleteAccount'])->middleware('throttle:5,1');
+    Route::post('/user/avatar',          [AuthController::class, 'updateAvatar'])->middleware('throttle:10,1');
+    Route::post('/user/archive-request', [AuthController::class, 'requestArchiveAccount'])->middleware('throttle:5,1');
+    Route::delete('/user',               [AuthController::class, 'deleteAccount'])->middleware('throttle:5,1');
 
     // Subscriptions
     Route::get('/subscription/status',       [SubscriptionController::class, 'status']);
@@ -89,9 +92,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/notifications', [AdminController::class, 'notifications']);
 
         // User management
-        Route::get('/users',           [AdminController::class, 'users']);
-        Route::get('/users/{user}',    [AdminController::class, 'showUser']);
-        Route::delete('/users/{user}', [AdminController::class, 'destroyUser']);
+        Route::get('/users',                   [AdminController::class, 'users']);
+        Route::get('/users/{user}',            [AdminController::class, 'showUser']);
+        Route::put('/users/{user}/archive',    [AdminController::class, 'archiveUser']);
+        Route::put('/users/{user}/restore',    [AdminController::class, 'restoreUser']);
+        Route::delete('/users/{user}',         [AdminController::class, 'destroyUser']);
 
         // Scan overview
         Route::get('/scans', [AdminController::class, 'scans']);
@@ -105,6 +110,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/retrain/duplicates',       [AdminRetrainController::class, 'duplicates']);
         Route::get('/retrain/status',           [AdminRetrainController::class, 'status']);
         Route::post('/retrain',                 [AdminRetrainController::class, 'trigger']);
+        Route::post('/retrain/queue-scan',      [AdminRetrainController::class, 'queueCandidateScan']);
         Route::post('/retrain/restore',         [AdminRetrainController::class, 'restore']);
         Route::post('/retrain/exclude',         [AdminRetrainController::class, 'exclude']);
         Route::post('/retrain/refresh',         [AdminRetrainController::class, 'refreshMl']);
@@ -156,11 +162,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // ── Super Admin-only routes ──────────────────────────────────────────────
     Route::middleware('super_admin')->prefix('admin')->group(function () {
 
-        // Account management (full CRUD)
+        // Account management (full CRUD + archive/restore)
         Route::get('/accounts',                        [AccountManagementController::class, 'index']);
         Route::post('/accounts',                       [AccountManagementController::class, 'store']);
         Route::get('/accounts/{user}',                 [AccountManagementController::class, 'show']);
         Route::put('/accounts/{user}',                 [AccountManagementController::class, 'update']);
+        Route::put('/accounts/{user}/archive',         [AccountManagementController::class, 'archive']);
+        Route::put('/accounts/{user}/restore',         [AccountManagementController::class, 'restore']);
         Route::delete('/accounts/{user}',                      [AccountManagementController::class, 'destroy']);
         Route::post('/accounts/{user}/reset-password',         [AccountManagementController::class, 'resetPassword']);
         Route::post('/accounts/{user}/resend-verification',    [AccountManagementController::class, 'resendVerification']);

@@ -40,6 +40,7 @@ class User extends Authenticatable implements MustVerifyEmail
         'pending_points',
         'verified_points',
         'lifetime_free_scans_used',
+        'archived_at',
     ];
 
     protected $hidden = [
@@ -64,7 +65,13 @@ class User extends Authenticatable implements MustVerifyEmail
             'pending_points'           => 'integer',
             'verified_points'          => 'integer',
             'lifetime_free_scans_used' => 'integer',
+            'archived_at'              => 'datetime',
         ];
+    }
+
+    public function isArchived(): bool
+    {
+        return ! is_null($this->archived_at);
     }
 
     public function isAdmin(): bool

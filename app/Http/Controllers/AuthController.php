@@ -8,11 +8,14 @@ use App\Rules\LegitimateEmail;
 use App\Rules\UniqueEmail;
 use App\Support\MailDiagnostics;
 use Illuminate\Auth\Events\Verified;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
@@ -248,7 +251,7 @@ class AuthController extends Controller
         ]);
     }
 
-    // POST /api/login
+    // POST /api/login (Regular User / Forager login)
     public function login(Request $request)
     {
         $login = strtolower(trim((string) ($request->input('login') ?? $request->input('email', ''))));
@@ -276,6 +279,20 @@ class AuthController extends Controller
             ]);
         }
 
+        if ($user->isArchived()) {
+            return response()->json([
+                'message' => 'This account has been archived. Please contact an administrator to restore your account.',
+                'error'   => 'ACCOUNT_ARCHIVED',
+            ], 403);
+        }
+
+        if ($user->isAdmin()) {
+            return response()->json([
+                'message' => 'Administrator accounts must sign in through the dedicated Admin Login portal (/admin/login).',
+                'error'   => 'ADMIN_PORTAL_REQUIRED',
+            ], 403);
+        }
+
         if ($this->requiresEmailVerification($user)) {
             return response()->json([
                 'message'               => 'Please verify your email address before signing in. Check your inbox for the verification link.',
@@ -297,6 +314,59 @@ class AuthController extends Controller
         ]);
     }
 
+    // POST /api/admin/login (Dedicated Admin & Super Admin login)
+    public function adminLogin(Request $request)
+    {
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email', ''))),
+        ]);
+
+        $data = $request->validate([
+            'email'    => 'required|email',
+            'password' => 'required|string',
+        ]);
+
+        $user = User::whereRaw('LOWER(email) = ?', [$data['email']])->first();
+
+        if (! $user || ! Hash::check($data['password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided administrator credentials are incorrect.'],
+            ]);
+        }
+
+        if ($user->isArchived()) {
+            return response()->json([
+                'message' => 'This administrator account has been archived. Please contact a Super Admin.',
+                'error'   => 'ACCOUNT_ARCHIVED',
+            ], 403);
+        }
+
+        if (! $user->isAdmin()) {
+            return response()->json([
+                'message' => 'Access denied. Regular user accounts cannot sign in through the Admin Portal.',
+                'error'   => 'FORAGER_NOT_ALLOWED',
+            ], 403);
+        }
+
+        if ($this->requiresEmailVerification($user)) {
+            return response()->json([
+                'message'               => 'Please verify your email address before signing in. Check your inbox for the verification link.',
+                'error'                 => 'EMAIL_NOT_VERIFIED',
+                'requires_verification' => true,
+                'email'                 => $user->email,
+            ], 403);
+        }
+
+        $user->tokens()->delete();
+        $token = $user->createToken('admin_auth_token')->plainTextToken;
+
+        return response()->json([
+            'message' => 'Administrator login successful.',
+            'user'    => $user,
+            'token'   => $token,
+        ]);
+    }
+
     // POST /api/logout
     public function logout(Request $request)
     {
@@ -308,7 +378,15 @@ class AuthController extends Controller
     // GET /api/me
     public function me(Request $request)
     {
-        return response()->json($request->user());
+        $user = $request->user();
+        if ($user && $user->isArchived()) {
+            $user->tokens()->delete();
+            return response()->json([
+                'message' => 'Your account has been archived.',
+                'error'   => 'ACCOUNT_ARCHIVED',
+            ], 403);
+        }
+        return response()->json($user);
     }
 
     // PUT /api/me
@@ -529,8 +607,8 @@ class AuthController extends Controller
         ]);
     }
 
-    // DELETE /api/user (auth:sanctum) — self-service account deletion
-    public function deleteAccount(Request $request)
+    // POST /api/user/archive-request (auth:sanctum) — sends signed email link to authorize archiving
+    public function requestArchiveAccount(Request $request)
     {
         $data = $request->validate([
             'password' => 'required|string',
@@ -546,50 +624,124 @@ class AuthController extends Controller
 
         if ($user->isAdmin()) {
             return response()->json([
-                'message' => 'Admin accounts cannot be deleted here. Contact a Super Admin.',
+                'message' => 'Admin accounts cannot be archived here. Contact a Super Admin.',
             ], 403);
         }
 
-        // Collect stored files before the rows disappear
-        $imagePaths = $user->scans()->pluck('image_path')->filter()->all();
-        $photo = $user->profile_photo;
+        $origin = rtrim((string) $request->headers->get('origin', ''), '/');
+        $configuredFrontend = rtrim(trim(explode(',', (string) config('app.frontend_url'))[0] ?? 'http://localhost:3000'), '/');
+        if ($configuredFrontend === '' || $configuredFrontend === 'http://localhost' || $configuredFrontend === 'http://127.0.0.1') {
+            $configuredFrontend = 'http://localhost:3000';
+        }
+        $frontendBaseUrl = $origin !== '' ? $origin : $configuredFrontend;
+        $id = $user->getKey();
+        $hash = sha1($user->getEmailForVerification());
 
-        DB::transaction(function () use ($user) {
-            // Billing records are retained for accounting/disputes: stamp the email,
-            // end any active plan, and let the FK null out user_id on delete.
-            $email = $user->email;
-            $user->subscriptions()->get()->each(function ($sub) use ($user, $email) {
-                $changes = ['deleted_user_email' => $email];
-                if ($sub->status === 'active') {
-                    $changes += [
-                        'status'       => 'cancelled',
-                        'auto_renew'   => false,
-                        'cancelled_at' => now(),
-                    ];
-                    SubscriptionEvent::log($user->id, 'cancelled', $sub->id, null, [
-                        'reason' => 'account_deleted_by_user',
-                    ]);
+        $relativeSigned = URL::temporarySignedRoute(
+            'user.archive.verify',
+            now()->addMinutes(60),
+            ['id' => $id, 'hash' => $hash],
+            false
+        );
+        $query = parse_url($relativeSigned, PHP_URL_QUERY);
+
+        $verificationUrl = $frontendBaseUrl
+            . '/confirm-archive?'
+            . http_build_query(['id' => $id, 'hash' => $hash])
+            . ($query ? '&' . $query : '');
+
+        Log::info('Account archive verification link generated', [
+            'user_id' => $user->id,
+            'email'   => $user->email,
+            'url'     => $verificationUrl,
+        ]);
+
+        try {
+            Mail::html(
+                '<div style="font-family:Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:16px;background:#ffffff;color:#0f172a;">'
+                . '<h2 style="margin:0 0 12px;color:#065f46;">MycoVision — Confirm Account Archive</h2>'
+                . '<p style="font-size:14px;line-height:1.6;color:#334155;">Hello <strong>' . e($user->name) . '</strong>,</p>'
+                . '<p style="font-size:14px;line-height:1.6;color:#334155;">We received a request to archive your MycoVision account. Archiving your account will deactivate sign-in access while safely preserving your scan history and records.</p>'
+                . '<p style="font-size:14px;line-height:1.6;color:#334155;">Click the button below within <strong>60 minutes</strong> to authorize and complete archiving your account:</p>'
+                . '<div style="margin:24px 0;text-align:center;">'
+                . '<a href="' . e($verificationUrl) . '" style="display:inline-block;padding:12px 24px;background:#d97706;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;border-radius:10px;">Authorize &amp; Archive Account</a>'
+                . '</div>'
+                . '<p style="font-size:12px;line-height:1.5;color:#64748b;">If the button does not work, copy and paste this link into your browser:<br><a href="' . e($verificationUrl) . '" style="color:#059669;word-break:break-all;">' . e($verificationUrl) . '</a></p>'
+                . '<p style="font-size:12px;line-height:1.5;color:#64748b;margin-top:20px;">If you did not request this, you can safely ignore this email and your account will remain active.</p>'
+                . '</div>',
+                function ($message) use ($user) {
+                    $message->to($user->email, $user->name)
+                        ->subject('MycoVision — Authorize Account Archiving');
                 }
-                $sub->update($changes);
+            );
+        } catch (\Throwable $e) {
+            Log::error('Archive authorization email failed', ['message' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Could not send the authorization email. Please try again shortly.',
+            ], 500);
+        }
+
+        return response()->json([
+            'message'           => 'An authorization verification link has been sent to ' . $user->email . '. Please check your email and click the link to archive your account.',
+            'email'             => $user->email,
+            'requires_approval' => true,
+        ]);
+    }
+
+    // GET /api/user/archive/verify/{id}/{hash} — verifies signed link and archives the user account
+    public function verifyArchiveAccount(Request $request, int $id, string $hash)
+    {
+        if (! URL::hasValidRelativeSignature($request)) {
+            return response()->json([
+                'message' => 'This archive authorization link is invalid or has expired. Please request a new link from Settings.',
+            ], 403);
+        }
+
+        $user = User::find($id);
+        if (! $user || ! hash_equals(sha1($user->getEmailForVerification()), (string) $hash)) {
+            return response()->json([
+                'message' => 'Invalid archive authorization link.',
+            ], 403);
+        }
+
+        try {
+            if (Schema::hasTable('users') && ! Schema::hasColumn('users', 'archived_at')) {
+                Schema::table('users', function (Blueprint $table) {
+                    $table->timestamp('archived_at')->nullable();
+                });
+            }
+        } catch (\Throwable) {
+            // ignore
+        }
+
+        if (! $user->isArchived()) {
+            DB::transaction(function () use ($user) {
+                $user->subscriptions()->where('status', 'active')->get()->each(function ($sub) use ($user) {
+                    $sub->update([
+                        'auto_renew' => false,
+                    ]);
+                    SubscriptionEvent::log($user->id, 'cancelled', $sub->id, null, [
+                        'reason' => 'account_archived_by_user',
+                    ]);
+                });
+
+                $user->update(['archived_at' => now()]);
+                $user->tokens()->delete();
             });
-            $user->refundRequests()->update(['deleted_user_email' => $email]);
-            SubscriptionEvent::where('user_id', $user->id)->update(['deleted_user_email' => $email]);
-
+        } else {
             $user->tokens()->delete();
-            $user->scans()->delete();
-            $user->delete();
-        });
-
-        // Remove files only after the DB commit succeeded
-        $disk = Storage::disk('public');
-        foreach ($imagePaths as $path) {
-            $disk->delete($path);
-        }
-        if ($photo && ! preg_match('#^https?://#i', $photo)) {
-            $disk->delete($photo);
         }
 
-        return response()->json(['message' => 'Your account has been deleted.']);
+        return response()->json([
+            'message'  => 'Your account has been verified and archived. You may contact an administrator anytime if you wish to restore access.',
+            'archived' => true,
+        ]);
+    }
+
+    // DELETE /api/user (auth:sanctum) — delegates to archive request flow instead of deleting
+    public function deleteAccount(Request $request)
+    {
+        return $this->requestArchiveAccount($request);
     }
 
     private function requiresEmailVerification(User $user): bool
