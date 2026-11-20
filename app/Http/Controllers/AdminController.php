@@ -190,8 +190,12 @@ class AdminController extends Controller
         $baseQuery = Scan::with(['user', 'species', 'contribution'])
             ->when($request->user_id, fn ($q) => $q->where('user_id', $request->user_id))
             ->when($request->has('only_consented') && ($request->boolean('only_consented') || $request->only_consented == '1'), function ($q) {
-                $q->whereHas('user', function ($u) {
-                    $u->where('allow_data_training', 1)->orWhere('allow_data_training', true);
+                $q->where(function ($sub) {
+                    $sub->whereHas('user', function ($u) {
+                        $u->where('allow_data_training', 1)->orWhere('allow_data_training', true);
+                    })->orWhereHas('collectionItems.folder', function ($f) {
+                        $f->where('allow_ai_training', 1)->orWhere('allow_ai_training', true);
+                    });
                 });
             })
             ->when($request->search, fn ($q) =>
