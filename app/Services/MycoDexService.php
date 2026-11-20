@@ -44,22 +44,27 @@ class MycoDexService
         return DB::transaction(function () use ($user, $scan, $speciesName, $confScore) {
             $lockedUser = User::where('id', $user->id)->lockForUpdate()->first();
 
-            // 4. Check user_mycodex collection
+            // 4. Check user_mycodex collection (case-insensitive and trimmed)
+            $cleanSpeciesName = trim((string) $speciesName);
             $mycodexEntry = UserMycodex::where('user_id', $lockedUser->id)
-                ->where('species_name', $speciesName)
+                ->where(function ($q) use ($cleanSpeciesName) {
+                    $q->where('species_name', $cleanSpeciesName)
+                      ->orWhereRaw('LOWER(species_name) = ?', [strtolower($cleanSpeciesName)]);
+                })
                 ->first();
 
             $isNewSpecies = is_null($mycodexEntry);
 
             if (!$isNewSpecies) {
-                // Anti-cheat guard: repeat scans of already unlocked species do NOT award points
+                // Increment scan count on the existing entry
+                $mycodexEntry->increment('scan_count');
                 return [
                     'eligible'                => false,
                     'reason'                  => 'already_unlocked',
                     'species_name'            => $speciesName,
                     'is_new_species'          => false,
                     'points_awarded'          => 0,
-                    'scan_count'              => $mycodexEntry->scan_count ?? 1,
+                    'scan_count'              => (int) $mycodexEntry->scan_count,
                     'pending_points_total'    => (int) $lockedUser->pending_points,
                     'verified_points_total'   => (int) $lockedUser->verified_points,
                     'badge'                   => 'Specimen Already Unlocked',
@@ -67,13 +72,21 @@ class MycoDexService
                 ];
             }
 
-            $mycodexEntry = UserMycodex::create([
-                'user_id'          => $lockedUser->id,
-                'species_name'     => $speciesName,
-                'first_scanned_at' => now(),
-                'scan_count'       => 1,
-                'cover_image_path' => $scan->image_path,
-            ]);
+            try {
+                $mycodexEntry = UserMycodex::create([
+                    'user_id'          => $lockedUser->id,
+                    'species_name'     => $cleanSpeciesName,
+                    'first_scanned_at' => now(),
+                    'scan_count'       => 1,
+                    'cover_image_path' => $scan->image_path,
+                ]);
+            } catch (\Throwable $e) {
+                $mycodexEntry = UserMycodex::where('user_id', $lockedUser->id)
+                    ->whereRaw('LOWER(species_name) = ?', [strtolower($cleanSpeciesName)])
+                    ->first();
+                $mycodexEntry?->increment('scan_count');
+                $isNewSpecies = false;
+            }
 
             // 5. Dynamic points calculation
             // Base scan: +2 for standard high-confidence (>= 0.80)

@@ -29,4 +29,9 @@ class PointTransaction extends Model
     {
         return $this->belongsTo(User::class);
     }
+
+    public function scan()
+    {
+        return $this->belongsTo(Scan::class, 'reference_id');
+    }
 }

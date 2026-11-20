@@ -57,18 +57,24 @@ class RewardService
         // Anti-cheat guard: Only award points for first-time species discovery
         $speciesId = $scan->species_id;
         $speciesName = $scan->result_name;
-        $alreadyRewarded = PointTransaction::where('user_id', $user->id)
+        $alreadyRewardedScanIds = PointTransaction::where('user_id', $user->id)
             ->where('type', 'scan_contribution')
             ->where('reference_type', 'scan')
             ->where('reference_id', '!=', $scan->id)
-            ->whereHas('scan', function ($q) use ($speciesId, $speciesName) {
-                if ($speciesId) {
-                    $q->where('species_id', $speciesId);
-                } else {
-                    $q->where('result_name', $speciesName);
-                }
-            })
-            ->exists();
+            ->pluck('reference_id');
+
+        $alreadyRewarded = false;
+        if ($alreadyRewardedScanIds->isNotEmpty()) {
+            $alreadyRewarded = Scan::whereIn('id', $alreadyRewardedScanIds)
+                ->where(function ($q) use ($speciesId, $speciesName) {
+                    if ($speciesId) {
+                        $q->where('species_id', $speciesId);
+                    } else {
+                        $q->where('result_name', $speciesName);
+                    }
+                })
+                ->exists();
+        }
 
         if ($alreadyRewarded) {
             return ['points_earned' => 0, 'reason' => 'specimen_already_rewarded'];
