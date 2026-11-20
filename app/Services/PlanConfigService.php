@@ -88,6 +88,24 @@ class PlanConfigService
                     'toxicity_alerts'    => true,
                 ],
             ],
+            'pro_pass' => [
+                'name'         => 'Pro Pass (7 Days)',
+                'amount'       => 0,
+                'interval'     => '7 days',
+                'badge'        => 'Rewards Pass',
+                'description'  => '7 days of unlimited mushroom scans unlocked with reward points',
+                'features'     => [
+                    'Unlimited AI mushroom scans for 7 days',
+                    'Full access to all saved collections & scan history',
+                    'Species toxicity alerts & field guide',
+                ],
+                'flags' => [
+                    'pdf_export'         => true,
+                    'priority_inference' => true,
+                    'full_history'       => true,
+                    'toxicity_alerts'    => true,
+                ],
+            ],
         ];
     }
 

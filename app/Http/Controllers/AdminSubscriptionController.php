@@ -54,18 +54,29 @@ class AdminSubscriptionController extends Controller
 
         $monthly = (clone $active)->where('plan', 'monthly')->count();
         $annual  = (clone $active)->where('plan', 'annual')->count();
+        $proPass = (clone $active)->where('plan', 'pro_pass')->count();
 
-        // Monthly recurring revenue, normalising annual plans to a per-month figure
-        $mrr = $monthly * ($plans['monthly']['amount'] ?? 0)
-             + $annual * (($plans['annual']['amount'] ?? 0) / 12);
+        // Calculate MRR from actually paid subscriptions (exclude admin grants and free point redemptions)
+        $paidActive = (clone $active)
+            ->where('price', '>', 0)
+            ->where('payment_method', '!=', 'admin_grant');
+
+        $paidMonthlyTotal = (float) (clone $paidActive)->where('plan', 'monthly')->sum('price');
+        $paidAnnualTotal  = (float) (clone $paidActive)->where('plan', 'annual')->sum('price');
+
+        // Monthly recurring revenue: monthly actual sum + (annual actual sum / 12)
+        $mrr = $paidMonthlyTotal + ($paidAnnualTotal / 12);
 
         $paid = Subscription::whereNotNull('paymongo_payment_id')
             ->where(fn ($q) => $q->whereNull('payment_status')->orWhere('payment_status', 'paid'));
 
         return response()->json([
-            'active'          => $monthly + $annual,
+            'active'          => $monthly + $annual + $proPass,
+            'paid_active'     => (clone $paidActive)->count(),
+            'complimentary'   => (clone $active)->where(fn ($q) => $q->where('price', '<=', 0)->orWhere('payment_method', 'admin_grant'))->count(),
             'monthly'         => $monthly,
             'annual'          => $annual,
+            'pro_pass'        => $proPass,
             'expiring_soon'   => (clone $active)->where('expires_at', '<=', $now->copy()->addDays(7))->count(),
             'cancelled'       => Subscription::where('status', 'cancelled')->count(),
             'pending'         => Subscription::where('status', 'pending')->count(),

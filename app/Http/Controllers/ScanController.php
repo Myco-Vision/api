@@ -123,8 +123,9 @@ class ScanController extends Controller
 
         // Check if user has active subscription or remaining free scans
         if (!$user->canScan()) {
+            $limit = \App\Models\User::freeScanLimit();
             return response()->json([
-                'message'               => 'Free scan limit reached (3 of 3 scans used). Please upgrade to Premium for unlimited scans.',
+                'message'               => "Free scan limit reached ({$limit} of {$limit} scans used). Please upgrade to Premium for unlimited scans.",
                 'error'                 => 'SCAN_LIMIT_REACHED',
                 'remaining_scans'       => 0,
                 'requires_subscription' => true,
@@ -236,6 +237,10 @@ class ScanController extends Controller
             'location_source'       => $data['location_source'] ?? (isset($data['latitude']) ? 'gps' : null),
             'notes'                 => $data['notes'] ?? null,
         ]);
+
+        if (!$user->hasActiveSubscription()) {
+            $user->increment('lifetime_free_scans_used');
+        }
 
         $rewardResult = (new \App\Services\RewardService())->awardForScan($user, $scan);
         $mycodexResult = (new \App\Services\MycoDexService())->handleScanSubmission($user, $scan, $mlData);

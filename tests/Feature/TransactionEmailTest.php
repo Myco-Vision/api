@@ -33,6 +33,7 @@ class TransactionEmailTest extends TestCase
         Schema::dropIfExists('subscription_events');
         Schema::dropIfExists('subscriptions');
         Schema::dropIfExists('scans');
+        Schema::dropIfExists('species');
         Schema::dropIfExists('users');
 
         Schema::create('users', function (Blueprint $table) {
@@ -52,7 +53,15 @@ class TransactionEmailTest extends TestCase
             $table->string('profile_photo')->nullable();
             $table->boolean('allow_data_training')->default(false);
             $table->timestamp('data_training_consented_at')->nullable();
+            $table->unsignedInteger('lifetime_free_scans_used')->default(0);
             $table->rememberToken();
+            $table->timestamps();
+        });
+
+        Schema::create('species', function (Blueprint $table) {
+            $table->id();
+            $table->string('name')->nullable();
+            $table->boolean('is_active_mycodex')->default(false);
             $table->timestamps();
         });
 

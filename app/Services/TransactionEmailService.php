@@ -342,6 +342,79 @@ class TransactionEmailService
     }
 
     /**
+     * Send pre-expiration reminder to subscriber.
+     */
+    public function sendExpirationReminder(Subscription $subscription, int $daysRemaining): bool
+    {
+        $subscription->loadMissing('user');
+        [$email, $name] = $this->resolveRecipient($subscription);
+
+        $planName = $this->formatPlanName($subscription->plan);
+        $expiryDate = $this->formatDate($subscription->expires_at);
+        $dayWord = $daysRemaining === 1 ? 'tomorrow' : "in {$daysRemaining} days";
+
+        $payload = [
+            'subject'        => "Reminder: Your MycoVision {$planName} expires {$dayWord}",
+            'badge'          => 'SUBSCRIPTION EXPIRING',
+            'badge_tone'     => 'info',
+            'heading'        => 'Subscription Expiration Reminder',
+            'recipient_name' => $name,
+            'intro'          => "Your MycoVision {$planName} is scheduled to expire {$dayWord} on {$expiryDate}. Renew or extend your plan to maintain uninterrupted unlimited mushroom scans and priority features.",
+            'details'        => [
+                ['label' => 'Subscription Plan', 'value' => $planName],
+                ['label' => 'Expiration Date',   'value' => $expiryDate],
+                ['label' => 'Days Remaining',    'value' => (string) $daysRemaining],
+                ['label' => 'Status',           'value' => 'Expiring Soon'],
+            ],
+            'note'          => 'Renewing early stacks seamlessly onto your current expiration date without losing any active days.',
+            'cta_label'     => 'Renew Subscription Now',
+            'cta_url'       => $this->frontendUrl('/users/subscription'),
+            'support_email' => RefundPolicyService::SUPPORT_EMAIL,
+        ];
+
+        return $this->deliver($email, $payload, 'Subscription expiration reminder email failed', [
+            'email_type'      => "expiration_reminder_{$daysRemaining}d",
+            'user_id'         => $subscription->user_id,
+            'subscription_id' => $subscription->id,
+        ]);
+    }
+
+    /**
+     * Notify user when a subscription has expired.
+     */
+    public function sendSubscriptionExpired(Subscription $subscription): bool
+    {
+        $subscription->loadMissing('user');
+        [$email, $name] = $this->resolveRecipient($subscription);
+
+        $planName = $this->formatPlanName($subscription->plan);
+
+        $payload = [
+            'subject'        => "Your MycoVision {$planName} has expired",
+            'badge'          => 'SUBSCRIPTION EXPIRED',
+            'badge_tone'     => 'danger',
+            'heading'        => 'Your Subscription Has Expired',
+            'recipient_name' => $name,
+            'intro'          => "Your {$planName} subscription has reached its end date. Your saved scans and history remain permanently accessible, but new AI mushroom scans now require an active subscription.",
+            'details'        => [
+                ['label' => 'Expired Plan',   'value' => $planName],
+                ['label' => 'Expired At',     'value' => $this->formatTimestamp($subscription->expires_at)],
+                ['label' => 'Current Status', 'value' => 'Expired (Free Tier)'],
+            ],
+            'note'          => 'You can reactivate unlimited scans at any time by choosing a Monthly or Annual pass.',
+            'cta_label'     => 'Reactivate Premium Access',
+            'cta_url'       => $this->frontendUrl('/users/subscription'),
+            'support_email' => RefundPolicyService::SUPPORT_EMAIL,
+        ];
+
+        return $this->deliver($email, $payload, 'Subscription expired notification email failed', [
+            'email_type'      => 'subscription_expired',
+            'user_id'         => $subscription->user_id,
+            'subscription_id' => $subscription->id,
+        ]);
+    }
+
+    /**
      * @return array<int, array{label: string, value: string}>
      */
     private function baseRefundDetails(RefundRequest $refund, string $statusLabel): array
@@ -483,10 +556,11 @@ class TransactionEmailService
     private function formatPlanName(?string $plan): string
     {
         return match ($plan) {
-            'monthly' => 'Premium Monthly',
-            'annual'  => 'Premium Annual',
-            null, ''  => 'Premium Subscription',
-            default   => ucfirst($plan),
+            'monthly'  => 'Premium Monthly',
+            'annual'   => 'Premium Annual',
+            'pro_pass' => 'Pro Pass (7 Days)',
+            null, ''   => 'Premium Subscription',
+            default    => ucfirst($plan),
         };
     }
 

@@ -28,8 +28,12 @@ class SubscriptionEvent extends Model
         return $this->belongsTo(Subscription::class);
     }
 
-    public static function log(?int $userId, string $action, ?int $subscriptionId = null, ?int $adminId = null, array $details = []): self
+    public static function log(?int $userId, string $action, ?int $subscriptionId = null, ?int $adminId = null, array $details = []): ?self
     {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('subscription_events')) {
+            return null;
+        }
+
         return static::create([
             'user_id'         => $userId,
             'subscription_id' => $subscriptionId,

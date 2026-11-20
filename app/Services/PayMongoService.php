@@ -59,12 +59,14 @@ class PayMongoService
 
     public function getPlans(): array
     {
-        return self::PLANS;
+        $dynamic = PlanConfigService::paidPlans();
+        return !empty($dynamic) ? $dynamic : self::PLANS;
     }
 
     public function getPlan(string $planKey): ?array
     {
-        return self::PLANS[$planKey] ?? null;
+        $plans = $this->getPlans();
+        return $plans[$planKey] ?? (self::PLANS[$planKey] ?? null);
     }
 
     /**

@@ -36,20 +36,24 @@ class SubscriptionController extends Controller
      */
     public function plans()
     {
+        $freeConfig = \App\Services\PlanConfigService::all()['free'] ?? [];
+        $freeLimit = \App\Services\PlanConfigService::freeScanLimit();
+
         return response()->json([
             'free_tier' => [
-                'name'        => 'Free Starter',
+                'name'        => $freeConfig['name'] ?? 'Free Starter',
                 'price'       => 0,
-                'scans_limit' => User::FREE_SCAN_LIMIT,
+                'scans_limit' => $freeLimit,
                 'renewable'   => false,
-                'description' => '3 lifetime AI mushroom scans with permanent access to saved data',
-                'features'    => [
-                    '3 AI mushroom scans included',
+                'description' => $freeConfig['description'] ?? "{$freeLimit} lifetime AI mushroom scans with permanent access to saved data",
+                'features'    => $freeConfig['features'] ?? [
+                    "{$freeLimit} AI mushroom scans included",
                     'Full access to all your saved scans & history',
                     'Full access to personal collection',
                     'Access to mushroom species directory',
                     'Basic classification details',
                 ],
+                'flags'       => $freeConfig['flags'] ?? [],
             ],
             'plans' => $this->payMongoService->getPlans(),
         ]);
@@ -92,6 +96,8 @@ class SubscriptionController extends Controller
         $user->unsetRelation('subscriptions');
 
         $scansUsed = $user->scans()->count();
+        $freeScansUsed = $user->freeScansUsed();
+        $freeLimit = \App\Services\PlanConfigService::freeScanLimit();
         $activeSub = $user->activeSubscription;
 
         $daysRemaining = null;
@@ -104,18 +110,35 @@ class SubscriptionController extends Controller
             ->take(10)
             ->get();
 
+        $mycodex = [
+            'latest_specimen_id'   => 0,
+            'latest_specimen_name' => null,
+            'total_species'        => 0,
+            'new_specimens_count'  => 0,
+        ];
+        if (\Illuminate\Support\Facades\Schema::hasTable('species')) {
+            $mycodex = [
+                'latest_specimen_id'   => (int) (\App\Models\Species::where('is_active_mycodex', true)->max('id') ?? 0),
+                'latest_specimen_name' => \App\Models\Species::where('is_active_mycodex', true)->latest('id')->value('name'),
+                'total_species'        => (int) \App\Models\Species::where('is_active_mycodex', true)->count(),
+                'new_specimens_count'  => (int) (\App\Models\Species::where('is_active_mycodex', true)->where('created_at', '>=', now()->subDays(7))->count()),
+            ];
+        }
+
         return response()->json([
-            'user_id'             => $user->id,
-            'role'                => $user->role,
-            'subscription_tier'   => $user->subscription_tier,
-            'is_subscribed'       => $user->is_subscribed,
-            'can_scan'            => $user->can_scan,
-            'free_limit'          => User::FREE_SCAN_LIMIT,
-            'scans_used'          => $scansUsed,
-            'remaining_scans'     => $user->remaining_scans, // -1 means unlimited
-            'reward_points'       => (int) $user->fresh()->reward_points,
-            'reward_settings'     => $this->rewardService->getSettings(),
-            'active_subscription' => $activeSub ? [
+            'user_id'                  => $user->id,
+            'role'                     => $user->role,
+            'subscription_tier'        => $user->subscription_tier,
+            'is_subscribed'            => $user->is_subscribed,
+            'can_scan'                 => $user->can_scan,
+            'free_limit'               => $freeLimit,
+            'lifetime_free_scans_used' => $freeScansUsed,
+            'scans_used'               => $freeScansUsed,
+            'total_scans_count'        => $scansUsed,
+            'remaining_scans'          => $user->remaining_scans, // -1 means unlimited
+            'reward_points'            => (int) $user->fresh()->reward_points,
+            'reward_settings'          => $this->rewardService->getSettings(),
+            'active_subscription'      => $activeSub ? [
                 'id'             => $activeSub->id,
                 'plan'           => $activeSub->plan,
                 'status'         => $activeSub->status,
@@ -129,12 +152,7 @@ class SubscriptionController extends Controller
                 'cancelled_at'   => $activeSub->cancelled_at?->toIso8601String(),
             ] : null,
             'history' => $history,
-            'mycodex' => [
-                'latest_specimen_id'   => (int) (\App\Models\Species::where('is_active_mycodex', true)->max('id') ?? 0),
-                'latest_specimen_name' => \App\Models\Species::where('is_active_mycodex', true)->latest('id')->value('name'),
-                'total_species'        => (int) \App\Models\Species::where('is_active_mycodex', true)->count(),
-                'new_specimens_count'  => (int) (\App\Models\Species::where('is_active_mycodex', true)->where('created_at', '>=', now()->subDays(7))->count()),
-            ],
+            'mycodex' => $mycodex,
         ]);
     }
 
@@ -165,44 +183,83 @@ class SubscriptionController extends Controller
 
         // Full redemption using reward points (no PayMongo checkout needed)
         if ($discount['is_full_redemption']) {
-            $startsAt = Carbon::now();
-            $expiresAt = $planKey === 'annual' ? Carbon::now()->addYear() : Carbon::now()->addMonth();
+            return DB::transaction(function () use ($user, $planKey, $planDetails, $discount, $request) {
+                $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+                if (!$lockedUser || (int) $lockedUser->reward_points < $discount['points_used']) {
+                    return response()->json(['message' => 'Insufficient reward points to complete redemption.'], 422);
+                }
 
-            $subscription = Subscription::create([
-                'user_id'             => $user->id,
-                'plan'                => $planKey,
-                'status'              => 'active',
-                'price'               => 0,
-                'currency'            => $planDetails['currency'],
-                'payment_method'      => 'reward_points',
-                'paymongo_session_id' => 'pts_' . bin2hex(random_bytes(8)),
-                'starts_at'           => $startsAt,
-                'expires_at'          => $expiresAt,
-                'metadata'            => [
-                    'mode'           => 'reward_points',
+                $currentActive = Subscription::where('user_id', $lockedUser->id)
+                    ->where('status', 'active')
+                    ->where('expires_at', '>', now())
+                    ->latest('expires_at')
+                    ->first();
+
+                $startsAt = Carbon::now();
+                if ($currentActive && $currentActive->expires_at && $currentActive->expires_at->isFuture()) {
+                    $baseExpiry = $currentActive->expires_at->copy();
+                    $expiresAt = $planKey === 'annual' ? $baseExpiry->addYear() : $baseExpiry->addMonth();
+                    $currentActive->update([
+                        'status'       => 'cancelled',
+                        'cancelled_at' => now(),
+                        'auto_renew'   => false,
+                        'metadata'     => array_merge($currentActive->metadata ?? [], [
+                            'stacked_into_new_period' => true,
+                        ]),
+                    ]);
+                } else {
+                    $expiresAt = $planKey === 'annual' ? Carbon::now()->addYear() : Carbon::now()->addMonth();
+                }
+
+                $subscription = Subscription::create([
+                    'user_id'             => $lockedUser->id,
+                    'plan'                => $planKey,
+                    'status'              => 'active',
+                    'price'               => 0,
+                    'currency'            => $planDetails['currency'],
+                    'payment_method'      => 'reward_points',
+                    'payment_status'      => 'paid',
+                    'auto_renew'          => false,
+                    'paymongo_session_id' => 'pts_' . bin2hex(random_bytes(8)),
+                    'starts_at'           => $startsAt,
+                    'expires_at'          => $expiresAt,
+                    'metadata'            => [
+                        'mode'           => 'reward_points',
+                        'points_used'    => $discount['points_used'],
+                        'discount_php'   => $discount['discount_php'],
+                        'original_price' => $planDetails['amount'],
+                        'ip_address'     => $request->ip(),
+                        'stacked'        => (bool) $currentActive,
+                    ],
+                ]);
+
+                $this->rewardService->redeemPoints(
+                    $lockedUser,
+                    $discount['points_used'],
+                    'subscription_redemption',
+                    "Redeemed {$discount['points_used']} pts for {$planDetails['name']}",
+                    'subscription',
+                    $subscription->id
+                );
+
+                SubscriptionEvent::log($lockedUser->id, 'activated', $subscription->id, null, [
+                    'plan'           => $subscription->plan,
+                    'amount'         => 0,
+                    'payment_method' => 'reward_points',
                     'points_used'    => $discount['points_used'],
-                    'discount_php'   => $discount['discount_php'],
-                    'original_price' => $planDetails['amount'],
-                    'ip_address'     => $request->ip(),
-                ],
-            ]);
+                    'source'         => 'checkout_full_points_redemption',
+                ]);
 
-            $this->rewardService->redeemPoints(
-                $user,
-                $discount['points_used'],
-                'subscription_redemption',
-                "Redeemed {$discount['points_used']} pts for {$planDetails['name']}",
-                'subscription',
-                $subscription->id
-            );
+                $this->transactionEmails->sendPaymentReceipt($subscription);
 
-            return response()->json([
-                'redeemed_full' => true,
-                'message'       => "Your {$planDetails['name']} has been activated using {$discount['points_used']} reward points!",
-                'subscription'  => $subscription,
-                'user'          => $user->fresh(),
-                'discount'      => $discount,
-            ]);
+                return response()->json([
+                    'redeemed_full' => true,
+                    'message'       => "Your {$planDetails['name']} has been activated using {$discount['points_used']} reward points!",
+                    'subscription'  => $subscription,
+                    'user'          => $lockedUser->fresh(),
+                    'discount'      => $discount,
+                ]);
+            });
         }
 
         try {
@@ -316,10 +373,10 @@ class SubscriptionController extends Controller
                 'source'     => 'verify',
             ]));
 
-            $emailSent = true;
+            $emailSent = false;
             $emailWarning = null;
             if ($justActivated) {
-                $this->handlePostActivation($subscription);
+                $emailSent = $this->handlePostActivation($subscription);
                 $emailWarning = $this->transactionEmails->lastWarning();
             }
 
@@ -375,7 +432,11 @@ class SubscriptionController extends Controller
                 return response()->json(['message' => 'Invalid signature.'], 400);
             }
         } else {
-            Log::warning('PAYMONGO_WEBHOOK_SECRET is empty — webhook signature NOT verified.');
+            if (!app()->environment('testing', 'local')) {
+                Log::error('PayMongo webhook rejected: PAYMONGO_WEBHOOK_SECRET is not configured in production.');
+                return response()->json(['message' => 'Webhook secret is not configured.'], 500);
+            }
+            Log::warning('PAYMONGO_WEBHOOK_SECRET is empty — allowed in local/testing only.');
         }
 
         $payload = $request->all();
@@ -496,7 +557,7 @@ class SubscriptionController extends Controller
      * 1. Deduct any used reward points.
      * 2. Send transaction payment receipt email.
      */
-    private function handlePostActivation(Subscription $sub): void
+    private function handlePostActivation(Subscription $sub): bool
     {
         $pointsUsed = (int) ($sub->metadata['points_used'] ?? 0);
         if ($pointsUsed > 0 && $sub->user_id) {
@@ -513,11 +574,12 @@ class SubscriptionController extends Controller
             }
         }
 
-        $this->transactionEmails->sendPaymentReceipt($sub);
+        return $this->transactionEmails->sendPaymentReceipt($sub);
     }
 
     /**
      * Atomically mark a paid PayMongo checkout subscription as active once.
+     * Stacks duration if user already has an active subscription.
      * Returns [$subscription, $justActivated] so payment receipts are sent exactly once.
      *
      * @return array{0: Subscription, 1: bool}
@@ -553,11 +615,47 @@ class SubscriptionController extends Controller
                     : (float) $planDetails['amount'];
             }
 
+            // Stack on top of existing active subscription if one exists
+            $currentActive = Subscription::where('user_id', $userId)
+                ->where('status', 'active')
+                ->where('expires_at', '>', now())
+                ->when($locked?->id, fn ($q) => $q->where('id', '!=', $locked->id))
+                ->latest('expires_at')
+                ->first();
+
             $startsAt = Carbon::now();
-            $expiresAt = $planKey === 'annual' ? $startsAt->copy()->addYear() : $startsAt->copy()->addMonth();
+
+            if ($currentActive && $currentActive->expires_at && $currentActive->expires_at->isFuture()) {
+                $baseExpiry = $currentActive->expires_at->copy();
+                $expiresAt = match ($planKey) {
+                    'annual'   => $baseExpiry->addYear(),
+                    'pro_pass' => $baseExpiry->addDays(7),
+                    default    => $baseExpiry->addMonth(),
+                };
+
+                // Close superseded subscription so only one active subscription remains
+                $currentActive->update([
+                    'status'       => 'cancelled',
+                    'cancelled_at' => now(),
+                    'auto_renew'   => false,
+                    'metadata'     => array_merge($currentActive->metadata ?? [], [
+                        'superseded_by_subscription_id' => $locked?->id,
+                        'stacked_into_new_period'       => true,
+                    ]),
+                ]);
+            } else {
+                $expiresAt = match ($planKey) {
+                    'annual'   => $startsAt->copy()->addYear(),
+                    'pro_pass' => $startsAt->copy()->addDays(7),
+                    default    => $startsAt->copy()->addMonth(),
+                };
+            }
 
             $metadata = $locked?->metadata ?? [];
             $metadata['verified_at'] = Carbon::now()->toIso8601String();
+            if ($currentActive) {
+                $metadata['stacked_from_subscription_id'] = $currentActive->id;
+            }
             if (($paymentData['source'] ?? null) === 'status_auto_sync') {
                 $metadata['auto_synced'] = true;
             }
@@ -594,6 +692,7 @@ class SubscriptionController extends Controller
                 'payment_id'     => $sub->paymongo_payment_id,
                 'payment_method' => $sub->payment_method,
                 'source'         => $paymentData['source'] ?? 'verify',
+                'stacked'        => (bool) $currentActive,
             ]);
 
             return [$sub, true];

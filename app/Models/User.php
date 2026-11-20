@@ -16,6 +16,11 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public const FREE_SCAN_LIMIT = 3;
 
+    public static function freeScanLimit(): int
+    {
+        return \App\Services\PlanConfigService::freeScanLimit();
+    }
+
     protected $fillable = [
         'name',
         'first_name',
@@ -34,6 +39,7 @@ class User extends Authenticatable implements MustVerifyEmail
         'reward_points',
         'pending_points',
         'verified_points',
+        'lifetime_free_scans_used',
     ];
 
     protected $hidden = [
@@ -57,6 +63,7 @@ class User extends Authenticatable implements MustVerifyEmail
             'reward_points'            => 'integer',
             'pending_points'           => 'integer',
             'verified_points'          => 'integer',
+            'lifetime_free_scans_used' => 'integer',
         ];
     }
 
@@ -120,14 +127,19 @@ class User extends Authenticatable implements MustVerifyEmail
             ->exists();
     }
 
+    public function freeScansUsed(): int
+    {
+        return (int) ($this->lifetime_free_scans_used ?? $this->scans()->count());
+    }
+
     public function remainingFreeScans(): int
     {
         if ($this->hasActiveSubscription()) {
             return -1; // -1 represents unlimited
         }
 
-        $used = $this->scans()->count();
-        return max(0, self::FREE_SCAN_LIMIT - $used);
+        $used = $this->freeScansUsed();
+        return max(0, self::freeScanLimit() - $used);
     }
 
     public function canScan(): bool
@@ -136,7 +148,7 @@ class User extends Authenticatable implements MustVerifyEmail
             return true;
         }
 
-        return $this->scans()->count() < self::FREE_SCAN_LIMIT;
+        return $this->freeScansUsed() < self::freeScanLimit();
     }
 
     public function getSubscriptionTierAttribute(): string

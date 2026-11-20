@@ -115,7 +115,7 @@ class RewardPointsTest extends TestCase
             $scan = Scan::create([
                 'user_id' => $user->id,
                 'image_path' => "scans/m{$i}.jpg",
-                'result_name' => 'Oyster',
+                'result_name' => "Oyster {$i}",
                 'result_classification' => 'edible',
                 'confidence_level' => 90,
                 'latitude' => 14.5995,
