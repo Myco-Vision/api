@@ -59,6 +59,27 @@ class SpeciesSeeder extends Seeder
                 'description' => 'Gymnopilus is a genus of gilled mushrooms within the fungal family Hymenogastraceae, characterized by rusty-orange spore prints, yellow to reddish-brown caps, and an often bitter taste.',
                 'habitat' => 'Dead wood, decaying hardwood or palm logs, and tree stumps.',
             ],
+            [
+                'name' => 'Buna Shimeji',
+                'scientific_name' => 'Hypsizygus tessellatus',
+                'classification' => 'edible',
+                'description' => 'Hypsizygus tessellatus, commonly known as Buna-shimeji or the beech mushroom, is an edible mushroom native to East Asia. It grows in dense clusters with small, marbled brownish-white caps and firm white stems.',
+                'habitat' => 'Decaying beech and other hardwood trees, logs, and stumps.',
+            ],
+            [
+                'name' => "Reishi / Artist's Conk",
+                'scientific_name' => 'Ganoderma',
+                'classification' => 'poisonous',
+                'description' => 'Ganoderma is a genus of polypore bracket fungi in the family Ganodermataceae. Its tough, woody, shelf-like fruiting bodies often display a shiny, varnished reddish-brown surface and are inedible as culinary mushrooms.',
+                'habitat' => 'Trunks, roots, and decaying stumps of living or dead hardwood and coniferous trees.',
+            ],
+            [
+                'name' => 'Turkey Tail Bracket',
+                'scientific_name' => 'Trametes',
+                'classification' => 'poisonous',
+                'description' => 'Trametes is a genus of leathery, fan-shaped polypore fungi that grow in overlapping tiers on wood. Their thin, tough, corky flesh makes them non-edible as a culinary mushroom.',
+                'habitat' => 'Fallen hardwood logs, dead branches, and decaying tree stumps.',
+            ],
         ];
 
         foreach ($species as $item) {

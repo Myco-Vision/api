@@ -247,10 +247,15 @@ class AdminController extends Controller
     // GET /api/admin/scans/candidates — Privacy Filtered Scans for AI Model Training
     public function candidateScans(Request $request)
     {
-        // STRICT PRIVACY FILTER: Only include scans from users with allow_data_training = true
+        // STRICT PRIVACY FILTER: Include scans from users with allow_data_training = true
+        // or scans placed inside collection folders with allow_ai_training = true
         $candidates = Scan::with('user', 'species')
-            ->whereHas('user', function ($q) {
-                $q->where('allow_data_training', true);
+            ->where(function ($sub) {
+                $sub->whereHas('user', function ($q) {
+                    $q->where('allow_data_training', 1)->orWhere('allow_data_training', true);
+                })->orWhereHas('collectionItems.folder', function ($f) {
+                    $f->where('allow_ai_training', 1)->orWhere('allow_ai_training', true);
+                });
             })
             ->latest()
             ->paginate(20);
@@ -406,7 +411,15 @@ class AdminController extends Controller
         }
 
         if ($isSuperAdmin) {
-            $retrainCandidates = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
+            $consentScope = function ($sub) {
+                $sub->whereHas('user', function ($q) {
+                    $q->where('allow_data_training', 1)->orWhere('allow_data_training', true);
+                })->orWhereHas('collectionItems.folder', function ($f) {
+                    $f->where('allow_ai_training', 1)->orWhere('allow_ai_training', true);
+                });
+            };
+
+            $retrainCandidates = Scan::where($consentScope)
                 ->whereIn('result_classification', ['edible', 'poisonous'])
                 ->whereNotNull('image_path')
                 ->whereNull('retrained_at')
@@ -424,7 +437,7 @@ class AdminController extends Controller
                 ];
             }
 
-            $unlinkedSpecies = Scan::whereHas('user', fn ($q) => $q->where('allow_data_training', true))
+            $unlinkedSpecies = Scan::where($consentScope)
                 ->whereNull('species_id')
                 ->whereIn('result_classification', ['edible', 'poisonous'])
                 ->count();

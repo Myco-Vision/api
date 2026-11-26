@@ -559,7 +559,16 @@ class AdminRetrainController extends Controller
                 if ($contribUser) {
                     $deduct = min((int) $contribUser->pending_points, $points);
                     $contribUser->decrement('pending_points', $deduct);
-                    $contribUser->increment('verified_points', $points);
+                    $contribUser->increment('reward_points', $points);
+
+                    \App\Models\PointTransaction::create([
+                        'user_id'        => $contribUser->id,
+                        'points'         => $points,
+                        'type'           => 'annotation_approved',
+                        'description'    => "AI data contribution verified and queued for retraining ({$speciesName})",
+                        'reference_type' => 'scan_contribution',
+                        'reference_id'   => $contribution->id,
+                    ]);
                 }
             }
         } elseif ($scan->user_id) {
